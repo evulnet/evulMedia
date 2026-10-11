@@ -50,7 +50,9 @@ Every box above is browsable, streamable and shareable via URL.
   just show as plain files (graceful degradation).
 - **Subtitles** (opt-in, `MB_SUBS=1`): embedded text tracks in MKV/M4V and
   sidecar `.srt`/`.ass`/`.vtt` files are converted to WebVTT on demand and
-  appear in the player's native subtitle menu. No video re-encode ever.
+  painted by a built-in CC button in the player bar (cycles: off → track 1
+  → track 2 → …). Self-rendered on purpose: Safari never lists dynamically
+  inserted `<track>` elements in its caption menu. No video re-encode ever.
 - **Audio** plays inline (album/audiobook stepping with arrow keys).
 - **PDFs** open in a near-fullscreen native viewer.
 - **Filenames-only cache**: a directory walk never blocks a request;
@@ -61,7 +63,7 @@ Every box above is browsable, streamable and shareable via URL.
 - **Self-expiring caches**: remux and thumbnail caches are LRU + age GC'd
   on service start and every 6 h.
 - **Self-test suite** (`selftest.py`) that deploys can run as a smoke test
-  (30 checks), and a Playwright browser test for the player UI
+  (34 checks), and a Playwright browser test for the player UI
   (`tests/ui_stream_test.py`, dev-only — needs Chromium).
 
 ## Requirements
@@ -189,7 +191,7 @@ Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
 ```
 app.py                  the whole server
 wsgi.py                 gunicorn entrypoint
-selftest.py             30-check smoke suite (read-only, safe on prod)
+selftest.py             34-check smoke suite (read-only, safe on prod)
 templates/index.html    single-page frontend (no build step, no CDN)
 tests/ui_stream_test.py Playwright UI test for stream seek/pause/seekable
 systemd/evulmedia@.service
