@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-test for the media browser. Run against the SAME env the service uses:
 
-    cd /opt/media-browser && sudo -u www-data env $(grep -v '^#' env/media.env | xargs) venv/bin/python selftest.py
+    cd /opt/evulmedia && sudo -u www-data env $(grep -v '^#' env/media.env | xargs) venv/bin/python selftest.py
 
 Exits non-zero on any failure. Safe: read-only except a scratch remux dir.
 """

@@ -149,9 +149,14 @@ def run_ui(sync_playwright):
             timeout=15000)
         check("UI: resume reconnects and plays", True)
 
-        # --- seekable toggle -> remuxed, natively seekable MP4 ---
-        page.locator("#seekable").check()
-        v.wait_for(timeout=60000)  # new element after remux sign + remux run
+        # --- settings cog: seekable mode -> remuxed, natively seekable MP4 ---
+        # (cog lives in the header, which the open modal covers: close first)
+        page.keyboard.press("Escape")
+        page.locator("#cogBtn").click()
+        page.locator("#pbSel").select_option("seekable")
+        page.goto(f"{BASE}/media/test_clip.mkv")
+        v = page.locator("video")
+        v.wait_for(timeout=60000)  # remux sign + one-time remux run
         src = page.evaluate("() => document.querySelector('video').src")
         check("UI: seekable toggle switches to /remux", "/remux" in src, src)
         page.evaluate("() => document.querySelector('video').play()")
@@ -163,7 +168,7 @@ def run_ui(sync_playwright):
             "() => document.querySelector('video').currentTime >= 11", timeout=15000)
         check("UI: native seek works in seekable mode", True)
         check("UI: seekable pref persisted",
-              page.evaluate("() => localStorage.getItem('mbSeekable')") == "1")
+              page.evaluate("() => localStorage.getItem('mbPbMode')") == "seekable")
 
         # reload: preference sticks, straight to remux without a click
         page.goto(f"{BASE}/media/test_clip.mkv")
