@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{ name }} — evulMedia</title>
+<style>
+:root {
+  --bg: #0e1013; --bg2: #161a20; --bg3: #1e242c; --line: #2a323d;
+  --fg: #dfe5ec; --dim: #8a95a3; --acc: #4da3ff; --acc2: #9b7bff;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg:#f4f6f9; --bg2:#ffffff; --bg3:#e8edf3; --line:#d5dce4;
+          --fg:#1c2733; --dim:#5d6b7a; --acc:#1a6fd4; --acc2:#6d4fe0; }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { position: sticky; top:0; z-index:10; background:var(--bg2);
+  border-bottom:1px solid var(--line); padding:.7rem 1rem;
+  display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; }
+header h1 { font-size:1.05rem; margin:0; font-weight:600; letter-spacing:.02em; }
+header h1 a { color:var(--fg); text-decoration:none; }
+header h1 .sub { color:var(--dim); font-weight:400; }
+#filter { margin-left:auto; background:var(--bg3); color:var(--fg);
+  border:1px solid var(--line); border-radius:8px; padding:.4rem .7rem;
+  font-size:.85rem; width:220px; outline:none; }
+#filter:focus { border-color:var(--acc); }
+nav { padding:.55rem 1rem; color:var(--dim); font-size:.85rem;
+  display:flex; flex-wrap:wrap; gap:.15rem; align-items:center; }
+nav a { color:var(--acc); text-decoration:none; }
+nav a:hover { text-decoration:underline; }
+nav .sep { opacity:.5; margin:0 .25rem; }
+#backBtn { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+  border-radius:8px; padding:.25rem .65rem; font-size:.8rem; cursor:pointer;
+  margin-right:.5rem; display:none; }
+#backBtn:hover { border-color:var(--acc); color:var(--acc); }
+main { padding: .4rem 1rem 3rem; }
+h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--dim); margin:1.2rem 0 .6rem; }
+.grid { display:grid; gap:.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.card { background:var(--bg2); border:1px solid var(--line); border-radius:10px;
+  overflow:hidden; cursor:pointer; text-decoration:none; color:var(--fg);
+  display:flex; flex-direction:column; transition: border-color .12s, transform .12s; }
+.card:hover { border-color:var(--acc); transform: translateY(-2px); }
+.thumb { width:100%; aspect-ratio:16/10; background:var(--bg3);
+  display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.icon { font-size:2.2rem; opacity:.85; }
+.label { padding:.4rem .55rem; font-size:.78rem; line-height:1.25;
+  word-break:break-word; display:flex; flex-direction:column; gap:.15rem; }
+.label .meta { color:var(--dim); font-size:.68rem; }
+.card.dir .thumb.folder { background:transparent; }
+.card.dir .icon svg { width:3.2rem; height:3.2rem; }
+.card.dir .icon { color:var(--acc2); }
+.badge { display:inline-block; font-size:.6rem; font-weight:700; letter-spacing:.05em;
+  padding:.1rem .35rem; border-radius:4px; background:var(--bg3); color:var(--dim);
+  text-transform:uppercase; align-self:flex-start; }
+.card.video .badge { color:var(--acc); }
+.card.image .badge { color:var(--acc2); }
+.status { color:var(--dim); padding:2rem; text-align:center; }
+.refresh { margin-left:.5rem; background:none; border:1px solid var(--line);
+  color:var(--dim); border-radius:8px; padding:.35rem .6rem; font-size:.78rem;
+  cursor:pointer; }
+.refresh:hover { color:var(--fg); border-color:var(--acc); }
+/* modal viewer */
+#modal { position:fixed; inset:0; background:rgba(0,0,0,.88); z-index:50;
+  display:none; align-items:center; justify-content:center; flex-direction:column; }
+#modal.open { display:flex; }
+#modal .stage { max-width:92vw; max-height:82vh; display:flex;
+  align-items:center; justify-content:center; }
+#modal video { max-width:92vw; max-height:82vh; outline:none; background:#000; border-radius:8px; }
+#modal img { max-width:92vw; max-height:82vh; border-radius:8px; }
+#modal .bar { color:#cfd6de; padding:.8rem 1rem .2rem; max-width:92vw;
+  display:flex; gap:1rem; align-items:center; }
+#modal .bar .title { font-size:.9rem; }
+#modal .bar a { color:var(--acc); font-size:.8rem; }
+#modal .x { position:fixed; top:.6rem; right:1rem; font-size:1.6rem; color:#fff;
+  cursor:pointer; background:none; border:none; }
+#modal .pdfview { width:min(94vw,1100px); height:min(85vh,1200px); background:#fff; border:0; border-radius:8px; }
+#modal audio { width:min(80vw,560px); }
+.arrow { position:fixed; top:50%; transform:translateY(-50%); font-size:2rem;
+  color:#ffffff80; background:none; border:none; cursor:pointer; padding:1rem .4rem; }
+.arrow:hover { color:#fff; }
+#prev { left:.2rem; } #next { right:.2rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="/" id="homelink">{{ name }}</a> <span class="sub">/ evulMedia</span></h1>
+  <input id="filter" type="search" placeholder="filter this folder…" autocomplete="off">
+  <button class="refresh" id="refreshBtn" title="rescan this folder">⟳</button>
+</header>
+<nav id="crumbs"><button id="backBtn" title="up one level">← Back</button><span id="crumbLinks"></span></nav>
+<main><div id="content" class="status">loading…</div></main>
+
+<div id="modal">
+  <button class="x" title="close (Esc)">✕</button>
+  <button class="arrow" id="prev">‹</button>
+  <button class="arrow" id="next">›</button>
+  <div class="stage"></div>
+  <div class="bar"><span class="title"></span><span class="links"></span></div>
+</div>
+
+<script>
+const ROOT_NAME = {{ name|tojson }};
+const content = document.getElementById('content');
+const crumbs = document.getElementById('crumbs');
+const crumbLinks = document.getElementById('crumbLinks');
+const backBtn = document.getElementById('backBtn');
+backBtn.addEventListener('click', () => go(current.parent == null ? '' : current.parent));
+const filterEl = document.getElementById('filter');
+let current = { dirs: [], files: [] };
+let mediaSeq = [];   // media files in view order, for prev/next
+let seqIdx = -1;
+
+function esc(s){ const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
+function fmtSize(b){
+  if (b == null) return '';
+  const u=['B','KB','MB','GB','TB']; let i=0;
+  while (b>=1024 && i<u.length-1){ b/=1024; i++; }
+  return (b<10 && i>0 ? b.toFixed(1) : Math.round(b)) + ' ' + u[i];
+}
+function fmtDate(t){ return new Date(t*1000).toLocaleDateString(); }
+function q(p){ return '?path=' + encodeURIComponent(p); }
+function join(dir, name){ return dir ? dir + '/' + name : name; }
+
+function renderCrumbs(data){
+  let html = '<a href="/" data-path="">home</a>';
+  const parts = data.path ? data.path.split('/') : [];
+  parts.forEach((p, i) => {
+    const path = parts.slice(0, i+1).join('/');
+    html += '<span class="sep">/</span><a href="/browse/' + encodeURI(path) + '" data-path="' + esc(path) + '">' + esc(p) + '</a>';
+  });
+  crumbLinks.innerHTML = html;
+  crumbLinks.querySelectorAll('a').forEach(a => a.addEventListener('click', e => {
+    e.preventDefault(); go(a.dataset.path);
+  }));
+  backBtn.style.display = data.path ? '' : 'none';
+}
+
+function cardHTML(base, name, opts){
+  // opts: {kind, size, mtime, isDir, archive, thumbUrl}
+  const path = join(base, name);
+  const isFolder = opts.isDir || opts.archive;
+  const cls = 'card ' + (isFolder ? 'dir' : opts.kind);
+  const badge = isFolder
+    ? (opts.archive ? '<span class="badge">zip</span>' : '')
+    : '<span class="badge">' + opts.kind + '</span>';
+  const meta = isFolder ? '' :
+    '<span class="meta">' + fmtSize(opts.size) + ' · ' + fmtDate(opts.mtime) + '</span>';
+  let thumb;
+  const FOLDER_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
+  if (isFolder) thumb = '<div class="thumb folder"><span class="icon">' + FOLDER_SVG + '</span></div>';
+  else if (opts.thumbUrl) thumb = '<div class="thumb"><img loading="lazy" src="' + opts.thumbUrl + '" alt=""></div>';
+  else if (opts.kind === 'audio') thumb = '<div class="thumb"><span class="icon">\u266a</span></div>';
+  else thumb = '<div class="thumb"><span class="icon">\u2261</span></div>';
+  const href = isFolder ? 'data-dir="' + esc(path) + '"' : 'data-file="' + esc(path) + '" data-kind="' + opts.kind + '"';
+  return '<a class="' + cls + '" ' + href + ' title="' + esc(name) + '">' +
+    thumb + '<div class="label"><span>' + esc(name) + '</span>' + badge + meta + '</div></a>';
+}
+
+function render(data){
+  current = data;
+  renderCrumbs(data);
+  const base = data.path;
+  let html = '';
+  if (data.dirs.length){
+    html += '<h2>Folders · ' + data.dirs.length + '</h2><div class="grid">';
+    for (const d of data.dirs){
+      const dn = typeof d === 'string' ? d : d.name;
+      html += cardHTML(base, dn, {isDir:true, archive: typeof d !== 'string' && d.archive});
+    }
+    html += '</div>';
+  }
+  const MK = ['image','video','audio','pdf'];
+  const media = data.files.filter(f => MK.includes(f.kind));
+  const other = data.files.filter(f => !MK.includes(f.kind));
+  if (media.length){
+    html += '<h2>Media · ' + media.length + '</h2><div class="grid">';
+    for (const f of media) html += cardHTML(base, f.name, {...f, thumbUrl: f.thumb ? '/thumb' + q(join(base, f.name)) : ''});
+    html += '</div>';
+  }
+  if (other.length){
+    html += '<h2>Other · ' + other.length + '</h2><div class="grid">';
+    for (const f of other) html += cardHTML(base, f.name, f);
+    html += '</div>';
+  }
+  if (!data.dirs.length && !data.files.length) html = '<div class="status">empty folder</div>';
+  content.className = '';
+  content.innerHTML = html;
+
+  content.querySelectorAll('[data-dir]').forEach(el =>
+    el.addEventListener('click', e => { e.preventDefault(); go(el.dataset.dir); }));
+  mediaSeq = media.map(f => ({path: join(base, f.name), kind: f.kind, name: f.name}));
+  content.querySelectorAll('[data-file]').forEach(el =>
+    el.addEventListener('click', e => {
+      e.preventDefault();
+      const p = el.dataset.file;
+      if (['image','video','audio','pdf'].includes(el.dataset.kind)) openModal(p);
+      else window.open('/view' + q(p), '_blank');
+    }));
+  applyFilter();
+}
+
+function applyFilter(){
+  const needle = filterEl.value.trim().toLowerCase();
+  content.querySelectorAll('.card').forEach(c => {
+    c.style.display = !needle || c.textContent.toLowerCase().includes(needle) ? '' : 'none';
+  });
+}
+filterEl.addEventListener('input', applyFilter);
+
+async function go(path, push=true, force=false){
+  history; // no-op
+  content.className = 'status'; content.textContent = 'loading…';
+  if (push) history.pushState({path}, '', dirUrl(path));
+  document.title = (path || ROOT_NAME) + ' — evulMedia';
+  const r = await fetch('/api/ls' + q(path) + (force ? '&refresh=1' : ''));
+  if (!r.ok){ content.textContent = 'error ' + r.status; return; }
+  render(await r.json());
+  window.scrollTo(0, 0);
+}
+document.getElementById('refreshBtn').addEventListener('click', () => go(current.path, false, true));
+
+// ---- modal viewer ----
+const modal = document.getElementById('modal');
+const stage = modal.querySelector('.stage');
+function openModal(path, push=true){
+  seqIdx = mediaSeq.findIndex(m => m.path === path);
+  if (seqIdx < 0) return;
+  showCurrent(false);
+  modal.classList.add('open');
+  if (push) history.pushState({media:path}, '', mediaUrl(path));
+}
+async function showCurrent(forceKind){
+  const m = mediaSeq[seqIdx];
+  if (!m) return;
+  modal.querySelector('.title').textContent = m.name;
+  if (forceKind === 'mp4' && m.mode !== 'mp4')
+    stage.innerHTML = '<div class="status" style="color:#9cf">preparing MP4 remux (~10-30s)…</div>';
+  if (forceKind || !m.url) {
+    const want = forceKind === 'mp4' ? '&mode=mp4'
+               : forceKind ? '&mode=stream' : '';
+    const r = await fetch('/api/sign?path=' + encodeURIComponent(m.path) + want);
+    if (r.ok) {
+      const s = await r.json();
+      m.url = s.url; m.mode = s.mode;
+      if (forceKind === true && m.mode === 'stream')
+        m.url += (m.url.indexOf('?') >= 0 ? '&' : '?') + 'transcode=1';
+    }
+  }
+  const url = m.url || '/view' + q(m.path);
+  stage.innerHTML = m.kind === 'video'
+    ? '<video src="' + url + '" controls autoplay></video>'
+    : m.kind === 'audio'
+    ? '<audio src="' + url + '" controls autoplay></audio>'
+    : m.kind === 'pdf'
+    ? '<iframe class="pdfview" src="' + url + '"></iframe>'
+    : '<img src="' + url + '" alt="">';
+  if (m.kind === 'video' || m.kind === 'audio') {
+    const el = stage.querySelector('video, audio');
+    el.addEventListener('error', () => {
+      // e.g. Safari rejects the chunked /stream pipe: fall back to the
+      // seekable MP4 remux (video only), then a forced transcode, then give up.
+      if (m.mode === 'stream' && m.kind === 'video' && !m.retry) {
+        m.retry = 'mp4'; showCurrent('mp4'); return;
+      }
+      if (m.mode === 'stream' && m.retry !== 'tc') {
+        m.retry = 'tc'; showCurrent(true); return;
+      }
+      if (m.retry === 'mp4') {
+        m.retry = 'tc'; showCurrent(true); return;
+      }
+      stage.innerHTML = '<div class="status" style="color:#f77">playback failed \u2014 unsupported format or transcode pool busy</div>';
+    });
+  }
+  let links = '<a href="' + url + '" download="' + esc(m.name) + '">download</a>';
+  if (m.kind === 'video' && m.mode !== 'mp4')
+    links += ' &middot; <a href="#" id="mp4">play as MP4</a>';
+  if (m.kind === 'video' && m.mode !== 'stream')
+    links += ' &middot; <a href="#" id="tc">transcode playback</a>';
+  modal.querySelector('.links').innerHTML = links;
+  const mp4 = document.getElementById('mp4');
+  if (mp4) mp4.addEventListener('click', e => { e.preventDefault(); m.retry = 'mp4'; showCurrent('mp4'); });
+  const tc = document.getElementById('tc');
+  if (tc) tc.addEventListener('click', e => { e.preventDefault(); m.retry = 'tc'; showCurrent(true); });
+  if (modal.classList.contains('open'))
+    history.replaceState({media:m.path}, '', mediaUrl(m.path));
+}
+function step(d){
+  if (!mediaSeq.length) return;
+  seqIdx = (seqIdx + d + mediaSeq.length) % mediaSeq.length;
+  showCurrent();
+}
+document.getElementById('prev').addEventListener('click', e => { e.stopPropagation(); step(-1); });
+document.getElementById('next').addEventListener('click', e => { e.stopPropagation(); step(1); });
+modal.addEventListener('click', e => { if (e.target === modal || e.target.classList.contains('x')) closeModal(); });
+function closeModal(){
+  modal.classList.remove('open');
+  stage.innerHTML = '';
+  history.replaceState({path:current.path}, '', dirUrl(current.path));
+}
+document.addEventListener('keydown', e => {
+  if (!modal.classList.contains('open')) return;
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'TEXTAREA') return;
+  if (e.key === 'Escape') closeModal();
+  if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+});
+
+// ---- routing ----
+function dirUrl(p){ return p ? '/browse/' + p.split('/').map(encodeURIComponent).join('/') : '/'; }
+function mediaUrl(p){ return '/media/' + p.split('/').map(encodeURIComponent).join('/'); }
+function locPath(re){ const m = location.pathname.match(re); return m ? m[1].split('/').map(decodeURIComponent).join('/') : null; }
+
+async function openFromUrl(path){
+  const ps = path.split('/');
+  let ai = -1;
+  ps.forEach((s, i) => { if (ai < 0 && i < ps.length - 1 && /\.(cbz|zip)$/i.test(s)) ai = i; });
+  const parent = ai >= 0 ? ps.slice(0, ai+1).join('/') : ps.slice(0, -1).join('/');
+  const name   = ai >= 0 ? ps.slice(ai+1).join('/') : ps[ps.length-1];
+  await go(parent, false);
+  const idx = mediaSeq.findIndex(x => x.name === name);
+  if (idx >= 0) { seqIdx = idx; showCurrent(false); modal.classList.add('open'); }
+  else go(path, false);   // not a media item; treat as folder
+}
+
+window.addEventListener('popstate', () => {
+  const mp = locPath(/^\/media\/(.*)$/);
+  if (mp !== null && mp !== '') { openFromUrl(mp.replace(/\/+$/,'')); return; }
+  const bp = locPath(/^\/browse\/(.*)$/);
+  go(bp === null ? '' : bp.replace(/\/+$/,''), false);
+});
+document.getElementById('homelink').addEventListener('click', e => { e.preventDefault(); go(''); });
+const startMedia = locPath(/^\/media\/(.*)$/);
+const startBrowse = locPath(/^\/browse\/(.*)$/);
+if (startMedia) openFromUrl(startMedia.replace(/\/+$/,''));
+else go(startBrowse === null ? '' : startBrowse.replace(/\/+$/,''), false);
+</script>
+</body>
+</html>

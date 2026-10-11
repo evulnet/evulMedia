@@ -1,0 +1,55 @@
+# evulMedia Caddyfile example — two instances: one open on the LAN, one
+# behind basic auth. Point DNS at this host, adjust hosts/ports/roots, and
+# paste the two `handle` blocks into your existing site block (the one that
+# listens on your TLS port).
+#
+# Key concepts:
+#  * /files/* is served by Caddy's own file_server (zero-copy, Range/seek
+#    friendly). Access is gated by a forward_auth subrequest to the app's
+#    /authz endpoint, which validates short-lived HMAC tokens minted by the
+#    app's /api/sign. Unsigned or forged /files URLs get 403.
+#  * Everything else (UI, /api, /stream, /remux, /thumb, /afile) is the app.
+#  * `handle_path` strips /files BEFORE the forward_auth subrequest runs;
+#    the app's /authz accepts the URI with or without the prefix.
+#
+# Regenerate the basic-auth users with:  caddy hash-password
+
+media.example.com:8443, private.example.com:8443 {
+	tls yourmail@example.com
+
+	# ---- instance "media" (app on 127.0.0.1:7081, root /srv/media/public)
+	handle @media host media.example.com {
+		encode zstd gzip {
+			minimum_length 1024
+		}
+		handle_path /files/* {
+			forward_auth 127.0.0.1:7081 {
+				uri /authz
+			}
+			root * /srv/media/public
+			file_server
+		}
+		reverse_proxy 127.0.0.1:7081
+	}
+
+	# ---- instance "private" (app on 127.0.0.1:7082, root /srv/media/private)
+	handle @private host private.example.com {
+		basic_auth {
+			youruser "$2a$14$REPLACE-WITH-caddy-hash-password-OUTPUT"
+		}
+		encode zstd gzip {
+			minimum_length 1024
+		}
+		handle_path /files/* {
+			forward_auth 127.0.0.1:7082 {
+				uri /authz
+			}
+			root * /srv/media/private
+			file_server
+		}
+		reverse_proxy 127.0.0.1:7082
+	}
+
+	# Any other host on this site block gets a plain 404.
+	respond 404
+}
