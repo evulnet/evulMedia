@@ -36,6 +36,13 @@ install -d -m 755 -o "$RUNUSER" -g "$RUNUSER" \
 [ -x "$PREFIX/venv/bin/gunicorn" ] || python3 -m venv "$PREFIX/venv"
 "$PREFIX/venv/bin/pip" install -q -r "$SRC/requirements.txt"
 
+# Quick Sync (optional): give the service user the render node
+if getent group video >/dev/null 2>&1; then
+    usermod -aG video "$RUNUSER" 2>/dev/null \
+        && echo "NOTE: added $RUNUSER to group video (Quick Sync); restart units" \
+        || echo "NOTE: run: usermod -aG video $RUNUSER   (enables Quick Sync)"
+fi
+
 # systemd
 install -m 644 "$SRC/systemd/evulmedia@.service" /etc/systemd/system/
 systemctl daemon-reload

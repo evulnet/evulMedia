@@ -71,6 +71,8 @@ Every box above is browsable, streamable and shareable via URL.
 
 - Linux (any recent), Python **3.11+**
 - `ffmpeg` + `ffprobe` on PATH (video thumbnails, /stream, /remux)
+- *Optional:* Intel iGPU (`/dev/dri/renderD*`) — transcodes then use Quick
+  Sync automatically (`h264_qsv`); no config, graceful x264 fallback.
 - [Caddy](https://caddyserver.com) **v2.6+** as the front (TLS + auth +
   the fast `/files` path). nginx is *not* supported — the /files
   fast-path relies on Caddy's `forward_auth` + `file_server`.
@@ -128,6 +130,13 @@ remux per file), or *force transcode* — plus theme, autoplay, whether
 file sizes show, and a fullscreen lightbox (⛶ / `F`, double-click an
 image). Safari gets its forced transcode as a file (`/remux?transcode=1`),
 never the live pipe. All preferences persist in `localStorage`.
+
+**Hardware assist:** any transcode prefers Intel Quick Sync (`h264_qsv`,
+~5-10x realtime, near-zero CPU) when the server has an iGPU *and* the
+service user can open `/dev/dri` (`usermod -aG video www-data` + a
+group-aware unit, both provided). A tiny lazy probe tests a real encode
+session; on failure everything falls back to `libx264 -preset superfast`
+automatically. No configuration either way.
 
 **Why so many paths:** browsers (not servers) decide what they decode.
 Safari refuses chunked range-less streams; Chrome can't decode HEVC

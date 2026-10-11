@@ -11,6 +11,7 @@ EnvironmentFile=/opt/evulmedia/env/%i.env
 ExecStart=/opt/evulmedia/venv/bin/gunicorn --worker-class gthread --workers 2 --threads 16 --timeout 300 --access-logfile - --access-logformat '%(t)s %(a)s "%(r)s" %(s)s bytes=%(b)s dur=%(L)s' --bind 127.0.0.1:${MB_PORT} wsgi:app
 Restart=on-failure
 RestartSec=5
+SupplementaryGroups=video
 NoNewPrivileges=true
 PrivateTmp=true
 

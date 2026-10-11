@@ -48,6 +48,9 @@ import shutil
 import tempfile
 import threading
 import time
+from logging import getLogger
+
+_log = getLogger("evulmedia")
 import urllib.parse
 import zipfile
 from pathlib import Path
@@ -237,6 +240,44 @@ class Signer:
         return hmac.compare_digest(self._sig(rel, exp), sig or "")
 
 
+_qsv_cache = None
+
+
+def qsv_available():
+    """True if Intel Quick Sync can actually open an encode session
+    (iGPU present AND the /dev/dri render node is accessible). Probed once,
+    lazily; everything falls back to libx264 when False."""
+    global _qsv_cache
+    if _qsv_cache is None:
+        _qsv_cache = False
+        fd, probe_out = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                 "color=black:s=64x64:d=0.1", "-c:v", "h264_qsv",
+                 "-f", "mp4", "-y", probe_out],
+                capture_output=True, timeout=20)
+            _qsv_cache = r.returncode == 0
+        except (subprocess.SubprocessError, OSError):
+            pass
+        finally:
+            try:
+                os.unlink(probe_out)
+            except OSError:
+                pass
+    return _qsv_cache
+
+
+def qsv_video_args():
+    return ["-c:v", "h264_qsv", "-global_quality", "23", "-look_ahead", "0"]
+
+
+def x264_video_args():
+    return ["-c:v", "libx264", "-preset", "superfast", "-crf", "23",
+            "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p"]
+
+
 def probe(streams, source):
     """Run ffprobe and return the list of stream dicts."""
     try:
@@ -285,7 +326,8 @@ def plan_from_probe(probed, force_transcode=False):
     return "transcode-audio"
 
 
-def build_stream_cmd(mode, source, has_audio, has_video=True, start=0.0):
+def build_stream_cmd(mode, source, has_audio, has_video=True, start=0.0,
+                  video_enc=None):
     """Build the ffmpeg fMP4 pipe command. `start` is an input-side seek
     (-ss before -i: fast keyframe seek); the output timeline restarts at 0,
     so clients must track the content offset themselves."""
@@ -314,11 +356,11 @@ def build_stream_cmd(mode, source, has_audio, has_video=True, start=0.0):
     elif mode == "transcode-audio":
         cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
     else:
-        cmd += [
-            "-c:v", "libx264", "-preset", "veryfast", "-tune", "fastdecode",
-            "-crf", "23", "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
-        ]
+        cmd += (video_enc or
+                ["-c:v", "libx264", "-preset", "veryfast", "-tune", "fastdecode",
+                 "-crf", "23", "-vf", "scale='min(1920,iw)':-2",
+                 "-pix_fmt", "yuv420p"])
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
     cmd += [
         "-max_muxing_queue_size", "4096",
         "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
@@ -488,13 +530,9 @@ def extract_vtt(source, stream_id, cache_path, timeout=120):
         abort(502)
 
 
-def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
-                 force_transcode=False):
-    """Remux (stream-copy when possible, or fully re-encode when
-    force_transcode) into a faststart MP4 cache file and return its path.
-    Blocking; typically a few seconds for one episode."""
-    remux_dir = Path(remux_dir)
-    remux_dir.mkdir(parents=True, exist_ok=True)
+def remux_cache_path(root, remux_dir, target, rel, force_transcode=False):
+    """Cache destination for one remux build (content-keyed on root/rel/
+    size/mtime/mode). Returns (path, stat)."""
     st = target.stat()
     h = hashlib.sha1(
         b"%s\0%s\0%s\0%d\0%d\0%d" % (REMUX_FMT.encode(), str(root).encode(),
@@ -502,12 +540,22 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
                              st.st_size, st.st_mtime_ns,
                              1 if force_transcode else 0)
     ).hexdigest()
-    dest = remux_dir / (h + ".mp4")
+    return Path(remux_dir) / (h + ".mp4"), st
+
+
+def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
+                 force_transcode=False):
+    """Remux (stream-copy when possible, or fully re-encode when
+    force_transcode) into a faststart MP4 cache file and return its path.
+    Blocking; typically a few seconds for one episode."""
+    remux_dir = Path(remux_dir)
+    remux_dir.mkdir(parents=True, exist_ok=True)
+    dest, st = remux_cache_path(root, remux_dir, target, rel, force_transcode)
     if dest.is_file():
         os.utime(dest, None)
         return dest
 
-    lock_path = remux_dir / (h + ".lock")
+    lock_path = remux_dir / (dest.name[:-4] + ".lock")
     with open(lock_path, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         if dest.is_file():          # another worker won the race while we waited
@@ -523,15 +571,13 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
                "-i", str(target), "-map", "0:v:0"]
         cmd += ["-map", "0:a:0", "-dn"] if has_audio else ["-an"]
         if force_transcode:
-            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                    "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p"]
+            cmd += qsv_video_args() if qsv_available() else x264_video_args()
         elif vcodec in ("h264", "hevc", "vp9", "av1"):
             cmd += ["-c:v", "copy"]
             if vcodec == "hevc":
                 cmd += ["-tag:v", "hvc1"]   # Apple needs hvc1, not the default hev1
         else:
-            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                    "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p"]
+            cmd += qsv_video_args() if qsv_available() else x264_video_args()
         if has_audio:
             cmd += ["-c:a", "copy"] if acodec in ("aac", "mp3") else ["-c:a", "aac", "-b:a", "192k"]
         cmd += ["-f", "mp4", "-movflags", "+faststart", "-y", str(dest) + ".part"]
@@ -539,6 +585,14 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
             os.replace(str(dest) + ".part", dest)
+        except subprocess.CalledProcessError as exc:
+            _log.warning("remux build failed for %s: %s", rel,
+                         (exc.stderr or b"")[-600:].decode("utf-8", "replace"))
+            try:
+                os.unlink(str(dest) + ".part")
+            except OSError:
+                pass
+            raise
         except Exception:
             try:
                 os.unlink(str(dest) + ".part")
@@ -993,7 +1047,9 @@ def create_app():
         mode = plan_from_probe(probed, request.args.get("transcode") == "1")
         has_audio = any(s["codec_type"] == "audio" for s in probed)
         has_video = any(s["codec_type"] == "video" for s in probed)
-        cmd = build_stream_cmd(mode, target, has_audio, has_video, start)
+        cmd = build_stream_cmd(mode, target, has_audio, has_video, start,
+                               video_enc=(qsv_video_args() if qsv_available()
+                                          else None))
 
         def gen():
             proc = subprocess.Popen(
@@ -1033,17 +1089,24 @@ def create_app():
         if not target.is_file() or classify(target.suffix) != "video":
             abort(404)
         force = request.args.get("transcode") == "1"
+        cached, _ = remux_cache_path(root, remux_dir, target, rel, force)
+        if cached.is_file():          # built already: no probe, no slot
+            os.utime(cached, None)
+            return send_file(cached, mimetype="video/mp4", conditional=True,
+                             max_age=86400 * 7)
         slot = None
         probed = probe(["ffprobe", "-v", "error"], target)
         if force or plan_from_probe(probed) == "transcode":
             slot = pool.acquire()
             if slot is None:
-                return Response("transcode pool busy\n", status=503)
+                return Response("transcode pool busy\n", status=503,
+                                headers={"Retry-After": "10"})
         try:
             dest = ensure_remux(root, remux_dir, remux_max_gb, remux_max_age_days,
                                 target, rel, force_transcode=force)
-        except subprocess.CalledProcessError as exc:
-            return Response(f"remux failed: {exc}\n", status=500)
+        except subprocess.CalledProcessError:
+            return Response("remux build failed (server log has details)\n",
+                            status=500)
         finally:
             if slot is not None:
                 pool.release(slot)
