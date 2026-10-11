@@ -114,6 +114,10 @@ h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
 
 <script>
 const ROOT_NAME = {{ name|tojson }};
+// Safari rejects the chunked /stream pipe regardless of codec — its
+// "transcode" must be a file (remux endpoint with forced h264).
+const IS_SAFARI = /Apple Computer/.test(navigator.vendor);
+const TC_KIND = IS_SAFARI ? 'mp4tc' : true;
 const content = document.getElementById('content');
 const crumbs = document.getElementById('crumbs');
 const crumbLinks = document.getElementById('crumbLinks');
@@ -256,16 +260,18 @@ async function showCurrent(forceKind){
     forceKind = 'mp4';
   modal.querySelector('.bar').querySelectorAll('.seekctl').forEach(n => n.remove());
   modal.querySelector('.title').textContent = m.name;
-  if (forceKind === 'mp4' && m.mode !== 'mp4')
-    stage.innerHTML = '<div class="status" style="color:#9cf">preparing MP4 remux (~10-30s)…</div>';
+  if ((forceKind === 'mp4' && m.mode !== 'mp4') || forceKind === 'mp4tc')
+    stage.innerHTML = '<div class="status" style="color:#9cf">' +
+      (forceKind === 'mp4tc' ? 'preparing file transcode (30-90s)…'
+                             : 'preparing MP4 remux (~10-30s)…') + '</div>';
   if (forceKind || !m.url) {
-    const want = forceKind === 'mp4' ? '&mode=mp4'
+    const want = (forceKind === 'mp4' || forceKind === 'mp4tc') ? '&mode=mp4'
                : forceKind ? '&mode=stream' : '';
     const r = await fetch('/api/sign?path=' + encodeURIComponent(m.path) + want);
     if (r.ok) {
       const s = await r.json();
       m.url = s.url; m.mode = s.mode; m.dur = s.dur || 0; m.offset = 0;
-      if (forceKind === true && m.mode === 'stream')
+      if ((forceKind === true && m.mode === 'stream') || forceKind === 'mp4tc')
         m.url += (m.url.indexOf('?') >= 0 ? '&' : '?') + 'transcode=1';
     }
   }
@@ -281,16 +287,16 @@ async function showCurrent(forceKind){
     const el = stage.querySelector('video, audio');
     if (m.kind === 'video' && m.mode === 'stream') { m.base = url; m.offset = 0; attachStreamControls(el, m); }
     el.addEventListener('error', () => {
-      // e.g. Safari rejects the chunked /stream pipe: fall back to the
-      // seekable MP4 remux (video only), then a forced transcode, then give up.
+      // Safari rejects the chunked /stream pipe: fall back to the seekable
+      // MP4 remux, then to a file/pipe transcode (per-browser), then give up.
       if (m.mode === 'stream' && m.kind === 'video' && !m.retry) {
         m.retry = 'mp4'; showCurrent('mp4'); return;
       }
       if (m.mode === 'stream' && m.retry !== 'tc') {
-        m.retry = 'tc'; showCurrent(true); return;
+        m.retry = 'tc'; showCurrent(TC_KIND); return;
       }
       if (m.retry === 'mp4') {
-        m.retry = 'tc'; showCurrent(true); return;
+        m.retry = 'tc'; showCurrent(TC_KIND); return;
       }
       stage.innerHTML = '<div class="status" style="color:#f77">playback failed \u2014 unsupported format or transcode pool busy</div>';
     });
@@ -307,7 +313,7 @@ async function showCurrent(forceKind){
   const mp4 = document.getElementById('mp4');
   if (mp4) mp4.addEventListener('click', e => { e.preventDefault(); m.retry = 'mp4'; showCurrent('mp4'); });
   const tc = document.getElementById('tc');
-  if (tc) tc.addEventListener('click', e => { e.preventDefault(); m.retry = 'tc'; showCurrent(true); });
+  if (tc) tc.addEventListener('click', e => { e.preventDefault(); m.retry = 'tc'; showCurrent(TC_KIND); });
   const seekChk = document.getElementById('seekable');
   if (seekChk) seekChk.addEventListener('change', e => {
     localStorage.setItem('mbSeekable', e.target.checked ? '1' : '0');

@@ -396,16 +396,19 @@ class TranscodePool:
 
 REMUX_FMT = "hvc1"   # bump to invalidate all remux caches after muxer fixes
 
-def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel):
-    """Remux (stream-copy when possible) into a faststart MP4 cache file and
-    return its path. Blocking; typically a few seconds for one episode."""
+def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
+                 force_transcode=False):
+    """Remux (stream-copy when possible, or fully re-encode when
+    force_transcode) into a faststart MP4 cache file and return its path.
+    Blocking; typically a few seconds for one episode."""
     remux_dir = Path(remux_dir)
     remux_dir.mkdir(parents=True, exist_ok=True)
     st = target.stat()
     h = hashlib.sha1(
-        b"%s\0%s\0%s\0%d\0%d" % (REMUX_FMT.encode(), str(root).encode(),
+        b"%s\0%s\0%s\0%d\0%d\0%d" % (REMUX_FMT.encode(), str(root).encode(),
                              rel.encode("utf-8", "surrogateescape"),
-                             st.st_size, st.st_mtime_ns)
+                             st.st_size, st.st_mtime_ns,
+                             1 if force_transcode else 0)
     ).hexdigest()
     dest = remux_dir / (h + ".mp4")
     if dest.is_file():
@@ -427,7 +430,10 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel):
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
                "-i", str(target), "-map", "0:v:0"]
         cmd += ["-map", "0:a:0", "-dn"] if has_audio else ["-an"]
-        if vcodec in ("h264", "hevc", "vp9", "av1"):
+        if force_transcode:
+            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                    "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p"]
+        elif vcodec in ("h264", "hevc", "vp9", "av1"):
             cmd += ["-c:v", "copy"]
             if vcodec == "hevc":
                 cmd += ["-tag:v", "hvc1"]   # Apple needs hvc1, not the default hev1
@@ -930,7 +936,8 @@ def create_app():
             abort(404)
         try:
             dest = ensure_remux(root, remux_dir, remux_max_gb, remux_max_age_days,
-                                target, rel)
+                                target, rel,
+                                force_transcode=request.args.get("transcode") == "1")
         except subprocess.CalledProcessError as exc:
             return Response(f"remux failed: {exc}\n", status=500)
         return send_file(dest, mimetype="video/mp4", conditional=True,
