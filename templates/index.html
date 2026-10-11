@@ -11,9 +11,11 @@
   --fg: #dfe5ec; --dim: #8a95a3; --acc: #4da3ff; --acc2: #9b7bff;
 }
 @media (prefers-color-scheme: light) {
-  :root { --bg:#f4f6f9; --bg2:#ffffff; --bg3:#e8edf3; --line:#d5dce4;
+  :root:not([data-theme="dark"]) { --bg:#f4f6f9; --bg2:#ffffff; --bg3:#e8edf3; --line:#d5dce4;
           --fg:#1c2733; --dim:#5d6b7a; --acc:#1a6fd4; --acc2:#6d4fe0; }
 }
+:root[data-theme="light"] { --bg:#f4f6f9; --bg2:#ffffff; --bg3:#e8edf3; --line:#d5dce4;
+          --fg:#1c2733; --dim:#5d6b7a; --acc:#1a6fd4; --acc2:#6d4fe0; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -93,6 +95,30 @@ h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
   color:#ffffff80; background:none; border:none; cursor:pointer; padding:1rem .4rem; }
 .arrow:hover { color:#fff; }
 #prev { left:.2rem; } #next { right:.2rem; }
+#modal .fs { position:fixed; top:.65rem; right:3.3rem; font-size:1.25rem; color:#fff;
+  cursor:pointer; background:none; border:none; opacity:.75; }
+#modal .fs:hover { opacity:1; }
+#modal:fullscreen, #modal:-webkit-full-screen { background:#000; }
+#modal:fullscreen .stage, #modal:-webkit-full-screen .stage { max-width:100vw; max-height:90vh; }
+#modal:fullscreen video, #modal:fullscreen img,
+#modal:-webkit-full-screen video, #modal:-webkit-full-screen img { max-width:100vw; max-height:88vh; border-radius:0; }
+#modal:fullscreen .pdfview, #modal:-webkit-full-screen .pdfview { width:100vw; height:92vh; border-radius:0; }
+#modal:fullscreen .bar, #modal:-webkit-full-screen .bar { max-width:100vw; }
+/* settings */
+.cogbtn { background:none; border:1px solid var(--line); color:var(--dim);
+  border-radius:8px; width:2rem; height:2rem; cursor:pointer; font-size:1rem; line-height:1; }
+.cogbtn:hover { color:var(--fg); border-color:var(--acc); }
+#settings { position:fixed; top:3.3rem; right:1rem; z-index:30; background:var(--bg2);
+  border:1px solid var(--line); border-radius:10px; padding:.65rem .75rem; min-width:230px;
+  display:flex; flex-direction:column; gap:.5rem; box-shadow:0 8px 24px rgba(0,0,0,.35);
+  font-size:.83rem; color:var(--fg); }
+#settings[hidden] { display:none; }
+#settings label { display:flex; justify-content:space-between; align-items:center; gap:.6rem; }
+#settings label.chk { justify-content:flex-start; cursor:pointer; }
+#settings select { background:var(--bg3); color:var(--fg); border:1px solid var(--line);
+  border-radius:6px; padding:.2rem .35rem; font-size:.8rem; }
+#settings .hint { color:var(--dim); font-size:.72rem; border-top:1px solid var(--line); padding-top:.5rem; }
+body.no-size .label .meta { display:none; }
 </style>
 </head>
 <body>
@@ -100,12 +126,25 @@ h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
   <h1><a href="/" id="homelink">{{ name }}</a> <span class="sub">/ evulMedia</span></h1>
   <input id="filter" type="search" placeholder="filter this folder…" autocomplete="off">
   <button class="refresh" id="refreshBtn" title="rescan this folder">⟳</button>
+  <button class="cogbtn" id="cogBtn" title="settings">⚙</button>
 </header>
+<div id="settings" hidden>
+  <label>theme <select id="themeSel">
+    <option value="auto">auto</option><option value="dark">dark</option><option value="light">light</option>
+  </select></label>
+  <label>video playback <select id="pbSel">
+    <option value="auto">auto</option><option value="seekable">seekable MP4</option><option value="transcode">force transcode</option>
+  </select></label>
+  <label class="chk"><input type="checkbox" id="autoplayChk"> autoplay</label>
+  <label class="chk"><input type="checkbox" id="sizeChk"> show file sizes</label>
+  <div class="hint">lightbox: ⛶ = fullscreen (or double-click an image)</div>
+</div>
 <nav id="crumbs"><button id="backBtn" title="up one level">← Back</button><span id="crumbLinks"></span></nav>
 <main><div id="content" class="status">loading…</div></main>
 
 <div id="modal">
   <button class="x" title="close (Esc)">✕</button>
+  <button class="fs" id="fsBtn" title="fullscreen (F)">⛶</button>
   <button class="arrow" id="prev">‹</button>
   <button class="arrow" id="next">›</button>
   <div class="stage"></div>
@@ -140,6 +179,9 @@ function fmtT(t){ t=Math.max(0,Math.floor(t));
   const h=Math.floor(t/3600), m=Math.floor(t%3600/60), s=t%60;
   return (h ? h+':'+String(m).padStart(2,'0') : m) + ':' + String(s).padStart(2,'0'); }
 const seekPref = () => localStorage.getItem('mbSeekable') === '1';
+const pbMode = () => localStorage.getItem('mbPbMode')
+  || (seekPref() ? 'seekable' : 'auto');   // migrated old preference key
+const autoplayOn = () => localStorage.getItem('mbAutoplay') !== '0';
 function q(p){ return '?path=' + encodeURIComponent(p); }
 function join(dir, name){ return dir ? dir + '/' + name : name; }
 
@@ -254,10 +296,9 @@ function openModal(path, push=true){
 async function showCurrent(forceKind){
   const m = mediaSeq[seqIdx];
   if (!m) return;
-  // "seekable" preference: videos default to the remuxed faststart MP4
-  // (fully seekable via Range) instead of the live /stream pipe.
-  if (!forceKind && !m.url && m.kind === 'video' && seekPref())
-    forceKind = 'mp4';
+  // playback preference from the settings cog: auto | seekable | transcode
+  if (!forceKind && !m.url && m.kind === 'video' && pbMode() !== 'auto')
+    forceKind = pbMode() === 'seekable' ? 'mp4' : TC_KIND;
   modal.querySelector('.bar').querySelectorAll('.seekctl').forEach(n => n.remove());
   modal.querySelector('.title').textContent = m.name;
   if ((forceKind === 'mp4' && m.mode !== 'mp4') || forceKind === 'mp4tc')
@@ -276,10 +317,11 @@ async function showCurrent(forceKind){
     }
   }
   const url = m.url || '/view' + q(m.path);
+  const ap = autoplayOn() ? ' autoplay' : '';
   stage.innerHTML = m.kind === 'video'
-    ? '<video src="' + url + '" controls autoplay></video>'
+    ? '<video src="' + url + '" controls' + ap + '></video>'
     : m.kind === 'audio'
-    ? '<audio src="' + url + '" controls autoplay></audio>'
+    ? '<audio src="' + url + '" controls' + ap + '></audio>'
     : m.kind === 'pdf'
     ? '<iframe class="pdfview" src="' + url + '"></iframe>'
     : '<img src="' + url + '" alt="">';
@@ -301,25 +343,8 @@ async function showCurrent(forceKind){
       stage.innerHTML = '<div class="status" style="color:#f77">playback failed \u2014 unsupported format or transcode pool busy</div>';
     });
   }
-  let links = '<a href="' + url + '" download="' + esc(m.name) + '">download</a>';
-  if (m.kind === 'video' && m.mode !== 'mp4')
-    links += ' &middot; <a href="#" id="mp4">play as MP4</a>';
-  if (m.kind === 'video' && m.mode !== 'stream')
-    links += ' &middot; <a href="#" id="tc">transcode playback</a>';
-  if (m.kind === 'video')
-    links += ' &middot; <label id="seekableLbl"><input type="checkbox" id="seekable"'
-          + (seekPref() ? ' checked' : '') + '> seekable</label>';
-  modal.querySelector('.links').innerHTML = links;
-  const mp4 = document.getElementById('mp4');
-  if (mp4) mp4.addEventListener('click', e => { e.preventDefault(); m.retry = 'mp4'; showCurrent('mp4'); });
-  const tc = document.getElementById('tc');
-  if (tc) tc.addEventListener('click', e => { e.preventDefault(); m.retry = 'tc'; showCurrent(TC_KIND); });
-  const seekChk = document.getElementById('seekable');
-  if (seekChk) seekChk.addEventListener('change', e => {
-    localStorage.setItem('mbSeekable', e.target.checked ? '1' : '0');
-    m.url = null; m.retry = undefined;
-    showCurrent(e.target.checked ? 'mp4' : false);
-  });
+  modal.querySelector('.links').innerHTML =
+    '<a href="' + url + '" download="' + esc(m.name) + '">download</a>';
   if (modal.classList.contains('open'))
     history.replaceState({media:m.path}, '', mediaUrl(m.path));
 }
@@ -393,12 +418,62 @@ function closeModal(){
   history.replaceState({path:current.path}, '', dirUrl(current.path));
 }
 document.addEventListener('keydown', e => {
+  if (!settings.hidden && e.key === 'Escape') { settings.hidden = true; return; }
   if (!modal.classList.contains('open')) return;
   const t = e.target.tagName;
   if (t === 'INPUT' || t === 'TEXTAREA') return;
   if (e.key === 'Escape') closeModal();
+  if (e.key === 'f' || e.key === 'F') toggleFS();
   if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
   if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+});
+
+// ---- fullscreen + settings popover ------------------------------------
+function fsEl(){ return document.fullscreenElement || document.webkitFullscreenElement; }
+function toggleFS(){
+  if (fsEl()){ (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+  const rq = modal.requestFullscreen || modal.webkitRequestFullscreen;
+  if (rq) rq.call(modal);
+}
+document.getElementById('fsBtn').addEventListener('click', toggleFS);
+stage.addEventListener('dblclick', e => { if (e.target.tagName === 'IMG') toggleFS(); });
+
+const settings = document.getElementById('settings');
+const themeSel = document.getElementById('themeSel');
+const pbSel = document.getElementById('pbSel');
+const autoplayChk = document.getElementById('autoplayChk');
+const sizeChk = document.getElementById('sizeChk');
+document.getElementById('cogBtn').addEventListener('click', e => {
+  e.stopPropagation(); settings.hidden = !settings.hidden;
+});
+document.addEventListener('click', e => {
+  if (!settings.hidden && !settings.contains(e.target)) settings.hidden = true;
+});
+function applyTheme(v){
+  if (v === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', v);
+}
+themeSel.value = localStorage.getItem('mbTheme') || 'auto';
+applyTheme(themeSel.value);
+pbSel.value = pbMode();
+autoplayChk.checked = autoplayOn();
+sizeChk.checked = localStorage.getItem('mbShowSize') !== '0';
+document.body.classList.toggle('no-size', !sizeChk.checked);
+themeSel.addEventListener('change', () => {
+  localStorage.setItem('mbTheme', themeSel.value); applyTheme(themeSel.value);
+});
+pbSel.addEventListener('change', () => {
+  localStorage.setItem('mbPbMode', pbSel.value);
+  if (modal.classList.contains('open')) {
+    const m = mediaSeq[seqIdx];
+    if (m) { m.url = null; m.retry = undefined; showCurrent(false); }
+  }
+});
+autoplayChk.addEventListener('change', () =>
+  localStorage.setItem('mbAutoplay', autoplayChk.checked ? '1' : '0'));
+sizeChk.addEventListener('change', () => {
+  localStorage.setItem('mbShowSize', sizeChk.checked ? '1' : '0');
+  document.body.classList.toggle('no-size', !sizeChk.checked);
 });
 
 // ---- routing ----
