@@ -41,7 +41,9 @@ Every box above is browsable, streamable and shareable via URL.
 - **Thumbnails** for images and videos, generated lazily (ffmpeg frame
   grab) and content-addressed on disk (`sha1(relpath|size|mtime)`), so
   edits self-invalidate. CBZ/ZIP member thumbnails too.
-- **Playback that works everywhere** (see matrix below).
+- **Playback that works everywhere** (see matrix below), with pseudo-seek
+  and pause/resume on live streams, plus an optional "seekable" mode that
+  plays everything from a remuxed, Range-seekable MP4.
 - **CBZ/ZIP galleries** as virtual folders (in-memory, never extracted;
   zip-bomb entry cap included).
 - **Audio** plays inline (album/audiobook stepping with arrow keys).
@@ -53,7 +55,9 @@ Every box above is browsable, streamable and shareable via URL.
   transcoding can't fork-bomb your server.
 - **Self-expiring caches**: remux and thumbnail caches are LRU + age GC'd
   on service start and every 6 h.
-- **Self-test suite** (`selftest.py`) that deploys can run as a smoke test.
+- **Self-test suite** (`selftest.py`) that deploys can run as a smoke test
+  (28 checks), and a Playwright browser test for the player UI
+  (`tests/ui_stream_test.py`, dev-only — needs Chromium).
 
 ## Requirements
 
@@ -94,7 +98,7 @@ MB_ROOT=/path/to/media MB_THUMBS=$PWD/data/thumbs/dev venv/bin/python app.py
 | File                          | Path served                                   | Notes |
 |-------------------------------|-----------------------------------------------|-------|
 | images, native audio/mp4/webm/mov, PDFs | `/files/...` (Caddy `file_server`, HMAC-tokened) | zero-copy, real `Range`/seek |
-| `mkv`, `avi`, `ts`, wmv, … (Chrome-class) | `/stream` — ffmpeg pipes **fragmented MP4** | video `-c copy` when h264/HEVC/VP9/AV1; audio→AAC when needed; full h264 transcode last resort |
+| `mkv`, `avi`, `ts`, wmv, … (Chrome-class) | `/stream` — ffmpeg pipes **fragmented MP4** | video `-c copy` when h264/HEVC/VP9/AV1; audio→AAC when needed; full h264 transcode last resort. Seek via reconnect (`/stream?...&start=SECONDS`) |
 | same files (Safari-class)     | `/remux` — **one-time MKV→faststart-MP4** cache | copy, ~5 s/episode, then instant + seekable |
 | unsupported audio (e.g. FLAC on Safari) | `/stream` audio-only AAC                     | |
 | exotic/old codecs             | `/stream` h264 transcode, or the "transcode playback" link | |
@@ -103,6 +107,15 @@ The player auto-falls-back `/stream → /remux → forced transcode`, so one
 click usually finds the working path for your browser. HEVC is tagged
 `hvc1` so Apple devices decode it. Everything the browser can play itself
 never touches ffmpeg.
+
+**Seeking on live `/stream` playback:** the pipe has no index, so the UI
+seeks by reconnecting with `?start=` (ffmpeg input-seeks, which is instant
+in copy mode) and tracks the content offset for you. Pausing closes the
+pipe immediately (freeing the transcode slot) and a ▶ overlay resumes at
+the remembered position. Tick **seekable** in the player bar to instead
+play from the `/remux` faststart MP4 — fully seekable via native controls,
+at the cost of a one-time remux per file; the choice is remembered per
+browser.
 
 **Why so many paths:** browsers (not servers) decide what they decode.
 Safari refuses chunked range-less streams; Chrome can't decode HEVC
@@ -144,9 +157,9 @@ All config is env vars (per-instance files in `env/`):
 | `MB_SLOTS_DIR` | `../slots` | transcode lock dir (shared across instances) |
 
 Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
-`/authz` (Caddy subrequest), `/files/*` (Caddy), `/stream`, `/remux`,
-`/thumb`, `/afile` (archive members/docs), `/dl`, `/view`, `/browse/<path>`,
-`/media/<path>`.
+`/authz` (Caddy subrequest), `/files/*` (Caddy), `/stream[&start=SECONDS]`,
+`/remux`, `/thumb`, `/afile` (archive members/docs), `/dl`, `/view`,
+`/browse/<path>`, `/media/<path>`.
 
 ## Operations
 
@@ -167,12 +180,21 @@ Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
 ```
 app.py                  the whole server
 wsgi.py                 gunicorn entrypoint
-selftest.py             22-check smoke suite (read-only, safe on prod)
+selftest.py             28-check smoke suite (read-only, safe on prod)
 templates/index.html    single-page frontend (no build step, no CDN)
+tests/ui_stream_test.py Playwright UI test for stream seek/pause/seekable
 systemd/evulmedia@.service
 env/*.env.example       per-instance config seeds
 caddy/Caddyfile.example front proxy config
 scripts/install.sh      installer (/opt/evulmedia + venv + unit)
+```
+
+### Running the browser UI test (dev only)
+
+```bash
+python3 -m venv venv && venv/bin/pip install -r requirements.txt playwright
+venv/bin/playwright install chromium
+venv/bin/python tests/ui_stream_test.py   # skips cleanly without ffmpeg/Chromium
 ```
 
 ## Limitations (honest list)
@@ -180,8 +202,12 @@ scripts/install.sh      installer (/opt/evulmedia + venv + unit)
 - No upload/delete/edit — deliberately read-only.
 - No multi-user watch state, no metadata enrichment, no subtitles burn-in
   (embedded subtitle tracks are ignored via `-sn`; sidecar subs ignored).
-- `/stream` has no seeking and dies after `MB_STALL_TIMEOUT` of
-  non-consumption (that includes long pauses).
+- Live `/stream` playback has no *index*: the UI fakes seeking by reconnecting
+  at an offset (`?start=`), so a seek lands on the nearest keyframe and takes
+  a moment to rebuffer; the native scrubber is inactive in this mode (use the
+  player's seek bar or "seekable" mode). A live stream still dies after
+  `MB_STALL_TIMEOUT`, but the UI now closes the pipe on pause instead of
+  letting it linger, and resumes on demand.
 - PDF/CBZ viewers use the browser's own renderer (very good, not perfect).
 - Caddy-only. If you love nginx: the `/files` fast-path needs
   `auth_request`-equivalent work; PRs welcome.

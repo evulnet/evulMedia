@@ -220,6 +220,19 @@ def probe(streams, source):
         return []
 
 
+def probe_duration(source):
+    """Container duration in seconds, or 0.0 when unknown/unavailable."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(source)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return max(0.0, float(result.stdout.strip()))
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return 0.0
+
+
 def plan_from_probe(probed, force_transcode=False):
     """Decide how to feed this file to a browser from ffprobe stream data:
     'copy', 'transcode-audio', or 'transcode'. Copy-first always; re-encode
@@ -242,12 +255,17 @@ def plan_from_probe(probed, force_transcode=False):
     return "transcode-audio"
 
 
-def build_stream_cmd(mode, source, has_audio, has_video=True):
+def build_stream_cmd(mode, source, has_audio, has_video=True, start=0.0):
+    """Build the ffmpeg fMP4 pipe command. `start` is an input-side seek
+    (-ss before -i: fast keyframe seek); the output timeline restarts at 0,
+    so clients must track the content offset themselves."""
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
         "-fflags", "+genpts",
-        "-i", str(source),
     ]
+    if start > 0:
+        cmd += ["-ss", f"{start:.3f}"]
+    cmd += ["-i", str(source)]
     if has_video:
         cmd += ["-map", "0:v:0"]
     else:
@@ -819,8 +837,10 @@ def create_app():
         )
         if want_stream and kind == "video":
             # App-streamed remux; no token needed (app route is already protected).
+            # dur lets the frontend render a pseudo-seek bar for the live pipe.
             return jsonify({"url": f"/stream?path={urllib.parse.quote(rel)}",
-                            "mode": "stream", "name": target.name})
+                            "mode": "stream", "name": target.name,
+                            "dur": probe_duration(target)})
         if signer is None:
             # No Caddy in front (local dev): fall back to app streaming.
             return jsonify({"url": f"/view?path={urllib.parse.quote(rel)}",
@@ -847,12 +867,18 @@ def create_app():
     @app.get("/stream")
     def stream():
         """Remux/transcode any video on the fly to fragmented MP4 and pipe it
-        out. No Range support (seek limited), but plays everywhere.
+        out. No Range support (seek by reconnecting with ?start=SECONDS);
         Concurrency-capped via TranscodePool; paused/abandoned streams are
         killed after MB_STALL_TIMEOUT seconds by design."""
         target = safe_resolve(root, request.args.get("path", ""))
         if not target.is_file() or classify(target.suffix) not in ("video", "audio"):
             abort(404)
+        try:
+            start = float(request.args.get("start", "0"))
+        except ValueError:
+            abort(400)
+        if start < 0 or start > 7 * 86400:
+            abort(400)
 
         slot = pool.acquire()
         if slot is None:
@@ -866,7 +892,7 @@ def create_app():
         mode = plan_from_probe(probed, request.args.get("transcode") == "1")
         has_audio = any(s["codec_type"] == "audio" for s in probed)
         has_video = any(s["codec_type"] == "video" for s in probed)
-        cmd = build_stream_cmd(mode, target, has_audio, has_video)
+        cmd = build_stream_cmd(mode, target, has_audio, has_video, start)
 
         def gen():
             proc = subprocess.Popen(
