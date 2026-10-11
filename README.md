@@ -44,8 +44,13 @@ Every box above is browsable, streamable and shareable via URL.
 - **Playback that works everywhere** (see matrix below), with pseudo-seek
   and pause/resume on live streams, plus an optional "seekable" mode that
   plays everything from a remuxed, Range-seekable MP4.
-- **CBZ/ZIP galleries** as virtual folders (in-memory, never extracted;
-  zip-bomb entry cap included).
+- **CBZ/ZIP/RAR galleries** as virtual folders (in-memory, never extracted;
+  zip-bomb entry cap included). RAR needs `pip install rarfile` + any of
+  `unar`/`unrar`/`bsdtar`/`7z` on the server; without them `.rar`/`.cbr`
+  just show as plain files (graceful degradation).
+- **Subtitles** (opt-in, `MB_SUBS=1`): embedded text tracks in MKV/M4V and
+  sidecar `.srt`/`.ass`/`.vtt` files are converted to WebVTT on demand and
+  appear in the player's native subtitle menu. No video re-encode ever.
 - **Audio** plays inline (album/audiobook stepping with arrow keys).
 - **PDFs** open in a near-fullscreen native viewer.
 - **Filenames-only cache**: a directory walk never blocks a request;
@@ -158,6 +163,7 @@ All config is env vars (per-instance files in `env/`):
 | `MB_REMUX_DIR` / `MB_REMUX_MAX_GB` / `MB_REMUX_MAX_AGE_DAYS` | `../remux` / 50 / 14 | remux cache location/budget/expiry |
 | `MB_THUMB_MAX_GB` / `MB_THUMB_MAX_AGE_DAYS` | 2 / 30 | thumb cache budget/expiry (atime-based) |
 | `MB_SLOTS_DIR` | `../slots` | transcode lock dir (shared across instances) |
+| `MB_SUBS` | 0 | enable subtitle discovery + WebVTT conversion (`1` = on) |
 
 Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
 `/authz` (Caddy subrequest), `/files/*` (Caddy), `/stream[&start=SECONDS]`,
@@ -202,9 +208,12 @@ venv/bin/python tests/ui_stream_test.py   # skips cleanly without ffmpeg/Chromiu
 
 ## Limitations (honest list)
 
+- Subtitles are text-only (bitmap PGS/DVD subtitles are listed nowhere and
+  not converted); ASS styling is flattened to basic WebVTT.
 - No upload/delete/edit — deliberately read-only.
-- No multi-user watch state, no metadata enrichment, no subtitles burn-in
-  (embedded subtitle tracks are ignored via `-sn`; sidecar subs ignored).
+- No multi-user watch state, no metadata enrichment, no subtitle burn-in
+  (subs ride as separate WebVTT tracks; the video is never re-encoded for
+  them, and `/stream` still strips embedded tracks from the pipe).
 - Live `/stream` playback has no *index*: the UI fakes seeking by reconnecting
   at an offset (`?start=`), so a seek lands on the nearest keyframe and takes
   a moment to rebuffer; the native scrubber is inactive in this mode (use the

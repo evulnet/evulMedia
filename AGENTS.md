@@ -18,7 +18,7 @@ Emby/Jellyfin. Keep that spirit in every change: fewer moving parts, not more.
 ```
 app.py                  the entire server (single file, ~1050 lines; see section below)
 wsgi.py                 gunicorn entrypoint (calls create_app())
-selftest.py             30-check smoke suite; read-only, safe to run on prod
+selftest.py             32-check smoke suite; read-only, safe to run on prod
 templates/index.html    whole frontend: one HTML file, inline CSS/JS, no build step,
                         no frameworks, no CDN
 tests/ui_stream_test.py Playwright (Chromium) UI test for stream seek/pause/seekable;
@@ -27,7 +27,7 @@ env/*.env.example       per-instance config seeds (real *.env files are gitignor
 caddy/Caddyfile.example front-proxy config (TLS, auth, /files fast path)
 systemd/evulmedia@.service  template unit; instance name = env/<name>.env basename
 scripts/install.sh      installs to /opt/evulmedia (venv + unit); never touches env files
-requirements.txt        Flask, Pillow, gunicorn — that's all
+requirements.txt        Flask, Pillow, gunicorn (+ optional rarfile for RAR)
 ```
 
 ## How to run (dev)
@@ -46,7 +46,7 @@ empty in dev; production requires it.
 
 ```bash
 # 1) Smoke/logic suite — run against real env on deploys:
-venv/bin/python selftest.py                       # must exit 0; 30 checks
+venv/bin/python selftest.py                       # must exit 0; 32 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
@@ -85,6 +85,20 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   transcode slot) and shows a resume overlay — this is why pause no longer
   burns `MB_STALL_TIMEOUT`. Do not replace with `-copyts`/output seek
   without browser-testing all fallback paths.
+- **Subtitles are opt-in** (`MB_SUBS=1`, default off): `/api/subs` lists
+  embedded text streams (ffprobe) + sidecar files; `/subs` serves one track
+  as WebVTT (ffmpeg conversion for embedded/ASS, cached under
+  `remux_dir/subs`, 1 GB budget, atime GC — subtitle conversion is a
+  one-shot `subprocess.run`, pool-free by design, like `ensure_remux`).
+  The video pipeline itself never touches subs (`/stream` keeps `-sn`).
+  Bitmap tracks (PGS/DVD) are skipped. Sidecar access via `/subs` is
+  double-jail-checked: the key must match an enumerated sibling AND pass
+  `safe_resolve`.
+- **RAR/CBR** ride the same virtual-folder code as zip when `rarfile` is
+  installed *and* an external tool (`unar`/`unrar`/`bsdtar`/`7z`) exists;
+  `.rar/.cbr` degrade to plain files otherwise. `ARCHIVE_EXTS` is decided
+  once at import time. `rarfile` is the one non-core dependency, import-
+  guarded; removing it must keep the guarded-import contract.
 - **Client preferences** live in `localStorage` only (never the server):
   `mbPbMode` (video playback: auto|seekable|transcode), `mbTheme`,
   `mbAutoplay`, `mbShowSize`, plus legacy `mbSeekable` (migrated as a
@@ -112,7 +126,9 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
 ## Conventions
 
 - Backend: stdlib first; dependencies beyond Flask/Pillow/gunicorn need a
-  strong argument. Keep app.py one file unless it genuinely hurts.
+  strong argument (`rarfile` is grandfathered: optional, import-guarded,
+  feature-degrades without it). Keep app.py one file unless it genuinely
+  hurts.
 - Frontend: no build step, no frameworks, no CDN; keep everything inline in
   templates/index.html. Vanilla ES6, small DOM helpers, match existing style.
 - Error pages/JSON: terse (`{"error": "not found"}`).
@@ -132,8 +148,10 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   inactive during live mode (by design).
 - `/stream` remains subject to `MB_STALL_TIMEOUT` for genuinely abandoned
   (not UI-paused) connections.
-- No subtitles (embedded tracks are stripped via `-sn`), no upload/edit,
-  no multi-user state — deliberately out of scope; keep it that way.
+- Subtitle ASS/SSA styling is flattened to plain WebVTT; bitmap subs
+  (PGS/DVD) are not offered at all. Only text codecs convert.
+- `/subs` conversions are not TranscodePool-capped (short one-shots;
+  revisit if abusive).
 - Caddy-only deployment story (the `/files` fast path relies on
   `forward_auth` + `file_server`).
 
@@ -150,6 +168,13 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   test assets or Apple devices in CI).
 - `scripts/install.sh` and the systemd units were not re-run/changed; they
   require a root Linux box to verify.
+- RAR/CBR: listing, member serving, thumbnails, traversal blocking and
+  graceful degradation were verified end-to-end with the `unar` backend
+  (created via `rar`, read via rarfile+lsar/unar). The `unrar`/`bsdtar`/`7z`
+  backends and password-protected RARs remain unverified.
+- Subtitles verified for embedded SRT-in-MKV and sidecar SRT in headless
+  Chromium (conversion via ffmpeg 6.1); ASS/SSA conversion and Safari's
+  subtitle menu unverified.
 - UI tests run headless Chromium only; mobile browsers untested.
 
 ## Do-not-touch list

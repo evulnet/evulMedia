@@ -104,6 +104,12 @@ h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
 #modal:-webkit-full-screen video, #modal:-webkit-full-screen img { max-width:100vw; max-height:88vh; border-radius:0; }
 #modal:fullscreen .pdfview, #modal:-webkit-full-screen .pdfview { width:100vw; height:92vh; border-radius:0; }
 #modal:fullscreen .bar, #modal:-webkit-full-screen .bar { max-width:100vw; }
+#modal:fullscreen .bar .title, #modal:-webkit-full-screen .bar .title,
+#modal:fullscreen .bar .links, #modal:-webkit-full-screen .bar .links { display:none; }
+.spin { display:inline-block; width:.85rem; height:.85rem; margin-right:.5rem;
+  border:2px solid var(--acc); border-right-color:transparent; border-radius:50%;
+  vertical-align:-2px; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 /* settings */
 .cogbtn { background:none; border:1px solid var(--line); color:var(--dim);
   border-radius:8px; width:2rem; height:2rem; cursor:pointer; font-size:1rem; line-height:1; }
@@ -137,6 +143,7 @@ body.no-size .label .meta { display:none; }
   </select></label>
   <label class="chk"><input type="checkbox" id="autoplayChk"> autoplay</label>
   <label class="chk"><input type="checkbox" id="sizeChk"> show file sizes</label>
+  <label class="chk"><input type="checkbox" id="subsChk"> subtitles (when available)</label>
   <div class="hint">lightbox: ⛶ = fullscreen (or double-click an image)</div>
 </div>
 <nav id="crumbs"><button id="backBtn" title="up one level">← Back</button><span id="crumbLinks"></span></nav>
@@ -182,6 +189,7 @@ const seekPref = () => localStorage.getItem('mbSeekable') === '1';
 const pbMode = () => localStorage.getItem('mbPbMode')
   || (seekPref() ? 'seekable' : 'auto');   // migrated old preference key
 const autoplayOn = () => localStorage.getItem('mbAutoplay') !== '0';
+const subsOn = () => localStorage.getItem('mbSubs') === '1';   // opt-in per user
 function q(p){ return '?path=' + encodeURIComponent(p); }
 function join(dir, name){ return dir ? dir + '/' + name : name; }
 
@@ -302,7 +310,7 @@ async function showCurrent(forceKind){
   modal.querySelector('.bar').querySelectorAll('.seekctl').forEach(n => n.remove());
   modal.querySelector('.title').textContent = m.name;
   if ((forceKind === 'mp4' && m.mode !== 'mp4') || forceKind === 'mp4tc')
-    stage.innerHTML = '<div class="status" style="color:#9cf">' +
+    stage.innerHTML = '<div class="status" style="color:#9cf"><span class="spin"></span>' +
       (forceKind === 'mp4tc' ? 'preparing file transcode (30-90s)…'
                              : 'preparing MP4 remux (~10-30s)…') + '</div>';
   if (forceKind || !m.url) {
@@ -328,6 +336,17 @@ async function showCurrent(forceKind){
   if (m.kind === 'video' || m.kind === 'audio') {
     const el = stage.querySelector('video, audio');
     if (m.kind === 'video' && m.mode === 'stream') { m.base = url; m.offset = 0; attachStreamControls(el, m); }
+    if (subsOn()) {
+      fetch('/api/subs' + q(m.path)).then(r => r.ok ? r.json() : {subs: []}).then(j => {
+        (j.subs || []).forEach((s, i) => {
+          const tr = document.createElement('track');
+          tr.kind = 'subtitles'; tr.srclang = s.lang || '';
+          tr.label = s.label || ('subtitle ' + (i + 1));
+          tr.src = '/subs' + q(m.path) + '&key=' + encodeURIComponent(s.key);
+          el.appendChild(tr);
+        });
+      }).catch(() => {});
+    }
     el.addEventListener('error', () => {
       // Safari rejects the chunked /stream pipe: fall back to the seekable
       // MP4 remux, then to a file/pipe transcode (per-browser), then give up.
@@ -443,6 +462,7 @@ const themeSel = document.getElementById('themeSel');
 const pbSel = document.getElementById('pbSel');
 const autoplayChk = document.getElementById('autoplayChk');
 const sizeChk = document.getElementById('sizeChk');
+const subsChk = document.getElementById('subsChk');
 document.getElementById('cogBtn').addEventListener('click', e => {
   e.stopPropagation(); settings.hidden = !settings.hidden;
 });
@@ -459,6 +479,7 @@ pbSel.value = pbMode();
 autoplayChk.checked = autoplayOn();
 sizeChk.checked = localStorage.getItem('mbShowSize') !== '0';
 document.body.classList.toggle('no-size', !sizeChk.checked);
+subsChk.checked = subsOn();
 themeSel.addEventListener('change', () => {
   localStorage.setItem('mbTheme', themeSel.value); applyTheme(themeSel.value);
 });
@@ -474,6 +495,13 @@ autoplayChk.addEventListener('change', () =>
 sizeChk.addEventListener('change', () => {
   localStorage.setItem('mbShowSize', sizeChk.checked ? '1' : '0');
   document.body.classList.toggle('no-size', !sizeChk.checked);
+});
+subsChk.addEventListener('change', () => {
+  localStorage.setItem('mbSubs', subsChk.checked ? '1' : '0');
+  if (modal.classList.contains('open')) {
+    const m = mediaSeq[seqIdx];
+    if (m && ['video','audio'].includes(m.kind)) { m.retry = undefined; showCurrent(false); }
+  }
 });
 
 // ---- routing ----
