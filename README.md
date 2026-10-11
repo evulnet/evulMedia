@@ -129,6 +129,13 @@ file sizes show, and a fullscreen lightbox (⛶ / `F`, double-click an
 image). Safari gets its forced transcode as a file (`/remux?transcode=1`),
 never the live pipe. All preferences persist in `localStorage`.
 
+**Hardware assist:** any transcode prefers Intel Quick Sync (`h264_qsv`,
+~5-10x realtime, near-zero CPU) when the server has an iGPU *and* the
+service user can open `/dev/dri` (`usermod -aG video www-data` + a
+group-aware unit, both provided). A tiny lazy probe tests a real encode
+session; on failure everything falls back to `libx264 -preset superfast`
+automatically. No configuration either way.
+
 **Why so many paths:** browsers (not servers) decide what they decode.
 Safari refuses chunked range-less streams; Chrome can't decode HEVC
 without hardware; nobody plays `.mkv`/`.avi` containers at all. evulMedia

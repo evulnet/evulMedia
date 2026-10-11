@@ -240,6 +240,45 @@ class Signer:
         return hmac.compare_digest(self._sig(rel, exp), sig or "")
 
 
+_qsv_cache = None
+
+
+def qsv_available():
+    """True if Intel Quick Sync can actually open an encode session
+    (iGPU present AND the /dev/dri render node is accessible). Probed once,
+    lazily; everything falls back to libx264 when False."""
+    global _qsv_cache
+    if _qsv_cache is None:
+        _qsv_cache = False
+        import tempfile as _tf
+        fd, probe_out = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                 "color=black:s=64x64:d=0.1", "-c:v", "h264_qsv",
+                 "-f", "mp4", "-y", probe_out],
+                capture_output=True, timeout=20)
+            _qsv_cache = r.returncode == 0
+        except (subprocess.SubprocessError, OSError):
+            pass
+        finally:
+            try:
+                os.unlink(probe_out)
+            except OSError:
+                pass
+    return _qsv_cache
+
+
+def qsv_video_args():
+    return ["-c:v", "h264_qsv", "-global_quality", "23", "-look_ahead", "0"]
+
+
+def x264_video_args():
+    return ["-c:v", "libx264", "-preset", "superfast", "-crf", "23",
+            "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p"]
+
+
 def probe(streams, source):
     """Run ffprobe and return the list of stream dicts."""
     try:
@@ -288,7 +327,8 @@ def plan_from_probe(probed, force_transcode=False):
     return "transcode-audio"
 
 
-def build_stream_cmd(mode, source, has_audio, has_video=True, start=0.0):
+def build_stream_cmd(mode, source, has_audio, has_video=True, start=0.0,
+                  video_enc=None):
     """Build the ffmpeg fMP4 pipe command. `start` is an input-side seek
     (-ss before -i: fast keyframe seek); the output timeline restarts at 0,
     so clients must track the content offset themselves."""
@@ -317,11 +357,11 @@ def build_stream_cmd(mode, source, has_audio, has_video=True, start=0.0):
     elif mode == "transcode-audio":
         cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
     else:
-        cmd += [
-            "-c:v", "libx264", "-preset", "veryfast", "-tune", "fastdecode",
-            "-crf", "23", "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
-        ]
+        cmd += (video_enc or
+                ["-c:v", "libx264", "-preset", "veryfast", "-tune", "fastdecode",
+                 "-crf", "23", "-vf", "scale='min(1920,iw)':-2",
+                 "-pix_fmt", "yuv420p"])
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
     cmd += [
         "-max_muxing_queue_size", "4096",
         "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
@@ -526,15 +566,13 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
                "-i", str(target), "-map", "0:v:0"]
         cmd += ["-map", "0:a:0", "-dn"] if has_audio else ["-an"]
         if force_transcode:
-            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                    "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p"]
+            cmd += qsv_video_args() if qsv_available() else x264_video_args()
         elif vcodec in ("h264", "hevc", "vp9", "av1"):
             cmd += ["-c:v", "copy"]
             if vcodec == "hevc":
                 cmd += ["-tag:v", "hvc1"]   # Apple needs hvc1, not the default hev1
         else:
-            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                    "-vf", "scale='min(1920,iw)':-2", "-pix_fmt", "yuv420p"]
+            cmd += qsv_video_args() if qsv_available() else x264_video_args()
         if has_audio:
             cmd += ["-c:a", "copy"] if acodec in ("aac", "mp3") else ["-c:a", "aac", "-b:a", "192k"]
         cmd += ["-f", "mp4", "-movflags", "+faststart", "-y", str(dest) + ".part"]
@@ -1004,7 +1042,9 @@ def create_app():
         mode = plan_from_probe(probed, request.args.get("transcode") == "1")
         has_audio = any(s["codec_type"] == "audio" for s in probed)
         has_video = any(s["codec_type"] == "video" for s in probed)
-        cmd = build_stream_cmd(mode, target, has_audio, has_video, start)
+        cmd = build_stream_cmd(mode, target, has_audio, has_video, start,
+                               video_enc=(qsv_video_args() if qsv_available()
+                                          else None))
 
         def gen():
             proc = subprocess.Popen(
