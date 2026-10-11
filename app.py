@@ -20,6 +20,7 @@ Config is env-only:
   MB_THUMB_MAX_AGE_DAYS thumbnail expiry by last access           (default 30)
   MB_MAX_TRANSCODES     concurrent ffmpeg streams, machine-global (default 2)
   MB_STALL_TIMEOUT      kill stalled streams after N seconds      (default 300)
+  MB_SUBS               1 = enable subtitle discovery + WebVTT conversion
   MB_PORT               dev-server port for `python app.py`
 
 Media delivery (fast path): video/audio/image bytes are served by Caddy's
@@ -56,6 +57,7 @@ try:                              # optional RAR backend (needs an external tool
 except ImportError:               # noqa: C401
     rarfile = None
 
+from werkzeug.exceptions import HTTPException
 from PIL import Image, ImageOps
 from flask import (
     Flask,
@@ -181,8 +183,12 @@ def read_member(apath, member, max_size=512 * 1024 * 1024):
     try:
         with open_archive(apath) as zf:
             info = zf.getinfo(member)
-            if info.is_dir() or getattr(info, "flag_bits", 0) & 0x1 \
-                    or getattr(info, "needs_password", False):
+            encrypted = getattr(info, "flag_bits", 0) & 0x1 \
+                or getattr(info, "encrypted", False)
+            np = getattr(info, "needs_password", False)   # rarfile: method, not property
+            if callable(np):
+                np = np()
+            if info.is_dir() or encrypted or np:
                 abort(404)                      # dirs / encrypted entries
             if info.file_size > max_size:
                 abort(413)
@@ -191,6 +197,8 @@ def read_member(apath, member, max_size=512 * 1024 * 1024):
         abort(404)
     except (zipfile.BadZipFile, OSError):
         abort(404)
+    except HTTPException:
+        raise                       # keep 413/404 semantics set above
     except Exception:
         abort(404)          # rarfile raises a zoo of tool-specific errors
 

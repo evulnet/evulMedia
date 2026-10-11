@@ -211,8 +211,9 @@ venv/bin/python tests/ui_stream_test.py   # skips cleanly without ffmpeg/Chromiu
 - Subtitles are text-only (bitmap PGS/DVD subtitles are listed nowhere and
   not converted); ASS styling is flattened to basic WebVTT.
 - No upload/delete/edit — deliberately read-only.
-- No multi-user watch state, no metadata enrichment, no subtitles burn-in
-  (embedded subtitle tracks are ignored via `-sn`; sidecar subs ignored).
+- No multi-user watch state, no metadata enrichment, no subtitle burn-in
+  (subs ride as separate WebVTT tracks; the video is never re-encoded for
+  them, and `/stream` still strips embedded tracks from the pipe).
 - Live `/stream` playback has no *index*: the UI fakes seeking by reconnecting
   at an offset (`?start=`), so a seek lands on the nearest keyframe and takes
   a moment to rebuffer; the native scrubber is inactive in this mode (use the

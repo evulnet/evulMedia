@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -65,9 +67,19 @@ def main():
          "-shortest", "-y", str(clip)],
         check=True, timeout=120)
 
+    # second clip: same video + one embedded SRT track + one sidecar SRT
+    srt = media / "sub_src.srt"
+    srt.write_text("1\n00:00:02,000 --> 00:00:06,000\nhello subs\n")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(clip),
+         "-i", str(srt), "-map", "0", "-map", "1", "-c", "copy", "-c:s", "srt",
+         "-y", str(media / "test_sub.mkv")], check=True, timeout=120)
+    srt.rename(media / "test_sub.en.srt")   # sidecar for test_sub.mkv
+
     env = {**os.environ,
            "MB_ROOT": str(media), "MB_THUMBS": str(data / "thumbs"),
            "MB_PORT": str(PORT), "MB_SECRET": "ui-test-secret",
+           "MB_SUBS": "1",
            "MB_REMUX_DIR": str(data / "remux"), "MB_SLOTS_DIR": str(data / "slots")}
     srv = subprocess.Popen(
         [sys.executable, str(REPO / "app.py")], env=env, cwd=REPO,
@@ -83,6 +95,13 @@ def main():
 
     print(f"\n{len(FAILS)} failure(s)")
     sys.exit(1 if FAILS else 0)
+
+
+def _status(url):
+    try:
+        return urllib.request.urlopen(url, timeout=10).status
+    except urllib.error.HTTPError as e:
+        return e.code
 
 
 def run_ui(sync_playwright):
@@ -176,6 +195,31 @@ def run_ui(sync_playwright):
         page.wait_for_function("() => document.querySelector('video').src.includes('/remux')",
                                timeout=30000)
         check("UI: seekable mode used on fresh page load", True)
+
+        # --- subtitles (server runs with MB_SUBS=1) ---
+        subs = js.load(urllib.request.urlopen(f"{BASE}/api/subs?path=test_sub.mkv"))
+        keys = sorted(s["key"] for s in subs["subs"])
+        check("api/subs lists embedded + sidecar",
+              keys == ["e:0", "f:test_sub.en.srt"], str(keys))
+        head = urllib.request.urlopen(
+            f"{BASE}/subs?path=test_sub.mkv&key=e:0").read(6)
+        check("embedded track serves WEBVTT", head == b"WEBVTT")
+        head = urllib.request.urlopen(
+            f"{BASE}/subs?path=test_sub.mkv&key=f:test_sub.en.srt").read(6)
+        check("sidecar SRT serves WEBVTT (in-memory)", head == b"WEBVTT")
+        check("subs jail rejected",
+              _status(f"{BASE}/subs?path=test_sub.mkv&key=f:..%2Fnope") in (400, 404))
+
+        # UI: opt in via the cog, open the video, expect an attached track
+        page.keyboard.press("Escape")
+        page.locator("#cogBtn").click()
+        page.locator("#subsChk").check()
+        page.goto(f"{BASE}/media/test_sub.mkv")
+        page.locator("video").wait_for(timeout=60000)
+        page.wait_for_function(
+            "() => document.querySelector('video').textTracks.length >= 1", timeout=15000)
+        check("UI: subtitle tracks attached to player",
+              page.evaluate("() => document.querySelector('video').textTracks[0].label !== ''"))
 
         browser.close()
 

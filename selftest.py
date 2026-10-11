@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-test for the media browser. Run against the SAME env the service uses:
 
-    cd /opt/media-browser && sudo -u www-data env $(grep -v '^#' env/media.env | xargs) venv/bin/python selftest.py
+    cd /opt/evulmedia && sudo -u www-data env $(grep -v '^#' env/media.env | xargs) venv/bin/python selftest.py
 
 Exits non-zero on any failure. Safe: read-only except a scratch remux dir.
 """
@@ -13,7 +13,7 @@ import urllib.parse
 os.environ.setdefault("MB_REMUX_DIR", "/tmp/mb-selftest-remux")
 os.environ.setdefault("MB_SUBS", "0")
 
-from app import Signer, plan_from_probe, build_stream_cmd, create_app  # noqa: E402
+from app import Signer, plan_from_probe, build_stream_cmd, srt_to_vtt, create_app  # noqa: E402
 
 FAILS = []
 
@@ -73,8 +73,16 @@ def main():
         check("sign video mode=mp4 -> /remux", "/remux" in json.loads(r.data).get("url", ""))
         check("remux 404 on non-media", c.get("/remux?path=nope.txt").status_code == 404)
         check("remux 404 on missing file", c.get("/remux?path=zzz.mkv").status_code == 404)
-        check("subs disabled by default", c.get("/api/subs?path=x.mp4").json == {"subs": []})
-        check("subs endpoint 404 when disabled", c.get("/subs?path=x.mp4&key=e:0").status_code == 404)
+        if os.environ.get("MB_SUBS") == "1":
+            r = c.get("/api/subs?path=" + urllib.parse.quote(rel))
+            check("api/subs 200 + list when enabled",
+                  r.status_code == 200 and isinstance(r.get_json().get("subs"), list))
+            check("subs jail: traversal key rejected",
+                  c.get("/subs?path=" + urllib.parse.quote(rel)
+                        + "&key=f:../nope").status_code in (400, 404))
+        else:
+            check("subs disabled by default", c.get("/api/subs?path=x.mp4").json == {"subs": []})
+            check("subs endpoint 404 when disabled", c.get("/subs?path=x.mp4&key=e:0").status_code == 404)
         # /stream start-param validation (400 before any ffmpeg work)
         check("stream rejects non-numeric start",
               c.get("/stream?path=" + urllib.parse.quote(rel) + "&start=abc").status_code == 400)
@@ -119,6 +127,11 @@ def main():
     cmd2 = build_stream_cmd("transcode", "in.mkv", True, True, start=3600)
     check("stream: start works in transcode mode too",
           cmd2.index("-ss") < cmd2.index("-i") and "libx264" in cmd2)
+
+    # --- subtitle conversion (pure, no ffmpeg needed) ---
+    vtt = srt_to_vtt(b"1\r\n00:00:01,000 --> 00:00:02,500\r\nhi\r\n\r\n").decode()
+    check("srt->vtt: header prepended", vtt.startswith("WEBVTT"))
+    check("srt->vtt: comma -> dot timestamps", "00:00:01.000 --> 00:00:02.500" in vtt)
 
     print(f"\n{len(FAILS)} failure(s)")
     sys.exit(1 if FAILS else 0)
