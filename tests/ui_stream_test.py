@@ -79,7 +79,7 @@ def main():
     env = {**os.environ,
            "MB_ROOT": str(media), "MB_THUMBS": str(data / "thumbs"),
            "MB_PORT": str(PORT), "MB_SECRET": "ui-test-secret",
-           "MB_SUBS": "1",
+           "MB_SUBS": "1", "MB_MAX_TRANSCODES": "1",
            "MB_REMUX_DIR": str(data / "remux"), "MB_SLOTS_DIR": str(data / "slots")}
     srv = subprocess.Popen(
         [sys.executable, str(REPO / "app.py")], env=env, cwd=REPO,
@@ -88,7 +88,7 @@ def main():
         if not wait_port(PORT):
             print("FAIL: dev server did not start")
             sys.exit(1)
-        run_ui(sync_playwright)
+        run_ui(sync_playwright, data / "slots")
     finally:
         srv.terminate()
         shutil.rmtree(tmp, ignore_errors=True)
@@ -104,7 +104,7 @@ def _status(url):
         return e.code
 
 
-def run_ui(sync_playwright):
+def run_ui(sync_playwright, slots_dir):
     import urllib.request, json as js
 
     # --- server-side: /stream pipes an fMP4, ?start= seeks ---
@@ -244,6 +244,39 @@ def run_ui(sync_playwright):
         check("UI: CC button not duplicated on media switch",
               page.locator(".ccctl").count() <= 1,
               f"count={page.locator('.ccctl').count()}")
+
+        # --- /remux transcode build: pool gating, Retry-After, cache hit ---
+        # (last: we intentionally squat the single pool slot)
+        import fcntl
+        lk = open(Path(slots_dir) / "job0.lock", "w")
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1")
+            check("remux busy returns 503", False, "no exception raised")
+        except urllib.error.HTTPError as e:
+            check("remux busy returns 503", e.code == 503, str(e.code))
+            check("remux 503 carries Retry-After",
+                  e.headers.get("Retry-After") == "10",
+                  str(e.headers.get("Retry-After")))
+        fcntl.flock(lk, fcntl.LOCK_UN)
+        t0 = time.time()
+        head = urllib.request.urlopen(
+            f"{BASE}/remux?path=test_clip.mkv&transcode=1").read(16)
+        build_dt = time.time() - t0
+        check("forced transcode build serves MP4",
+              head[4:8] == b"ftyp" and build_dt < 60, f"{build_dt:.1f}s")
+        t0 = time.time()
+        urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1")
+        hit_dt = time.time() - t0
+        fcntl.flock(lk, fcntl.LOCK_EX)   # cache hit must not need the pool
+        try:
+            urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1")
+            ok_busy_hit = True
+        except urllib.error.HTTPError:
+            ok_busy_hit = False
+        fcntl.flock(lk, fcntl.LOCK_UN)
+        check("cached remux serves with pool saturated", ok_busy_hit)
+        check("cache hit skips probe (fast)", hit_dt < 1.0, f"{hit_dt:.2f}s")
 
         browser.close()
 

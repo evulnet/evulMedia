@@ -214,3 +214,12 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   `change-me`, `/srv/media`).
 - New dependencies and new network egress from the app require an explicit
   OK from the maintainer.
+
+- Transcode encoders: h264_qsv is preferred whenever a lazy probe session succeeds
+  (iGPU + `/dev/dri` access via `SupplementaryGroups=video`); fallback is
+  `libx264 -preset superfast`. Never hardcode the encoder list elsewhere than
+  `qsv_video_args()`/`x264_video_args()`.
+
+- `/remux` transcode builds run under the transcode pool; a cache hit
+  short-circuits BEFORE the probe/slot acquisition, and pool saturation
+  answers 503 with `Retry-After: 10` (mirroring `/stream`).

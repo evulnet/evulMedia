@@ -531,13 +531,9 @@ def extract_vtt(source, stream_id, cache_path, timeout=120):
         abort(502)
 
 
-def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
-                 force_transcode=False):
-    """Remux (stream-copy when possible, or fully re-encode when
-    force_transcode) into a faststart MP4 cache file and return its path.
-    Blocking; typically a few seconds for one episode."""
-    remux_dir = Path(remux_dir)
-    remux_dir.mkdir(parents=True, exist_ok=True)
+def remux_cache_path(root, remux_dir, target, rel, force_transcode=False):
+    """Cache destination for one remux build (content-keyed on root/rel/
+    size/mtime/mode). Returns (path, stat)."""
     st = target.stat()
     h = hashlib.sha1(
         b"%s\0%s\0%s\0%d\0%d\0%d" % (REMUX_FMT.encode(), str(root).encode(),
@@ -545,12 +541,22 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
                              st.st_size, st.st_mtime_ns,
                              1 if force_transcode else 0)
     ).hexdigest()
-    dest = remux_dir / (h + ".mp4")
+    return Path(remux_dir) / (h + ".mp4"), st
+
+
+def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
+                 force_transcode=False):
+    """Remux (stream-copy when possible, or fully re-encode when
+    force_transcode) into a faststart MP4 cache file and return its path.
+    Blocking; typically a few seconds for one episode."""
+    remux_dir = Path(remux_dir)
+    remux_dir.mkdir(parents=True, exist_ok=True)
+    dest, st = remux_cache_path(root, remux_dir, target, rel, force_transcode)
     if dest.is_file():
         os.utime(dest, None)
         return dest
 
-    lock_path = remux_dir / (h + ".lock")
+    lock_path = remux_dir / (dest.name[:-4] + ".lock")
     with open(lock_path, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         if dest.is_file():          # another worker won the race while we waited
@@ -1084,12 +1090,18 @@ def create_app():
         if not target.is_file() or classify(target.suffix) != "video":
             abort(404)
         force = request.args.get("transcode") == "1"
+        cached, _ = remux_cache_path(root, remux_dir, target, rel, force)
+        if cached.is_file():          # built already: no probe, no slot
+            os.utime(cached, None)
+            return send_file(cached, mimetype="video/mp4", conditional=True,
+                             max_age=86400 * 7)
         slot = None
         probed = probe(["ffprobe", "-v", "error"], target)
         if force or plan_from_probe(probed) == "transcode":
             slot = pool.acquire()
             if slot is None:
-                return Response("transcode pool busy\n", status=503)
+                return Response("transcode pool busy\n", status=503,
+                                headers={"Retry-After": "10"})
         try:
             dest = ensure_remux(root, remux_dir, remux_max_gb, remux_max_age_days,
                                 target, rel, force_transcode=force)
