@@ -924,9 +924,12 @@ def create_app():
                             "mode": "dir", "name": target.name})
         mode_req = request.args.get("mode")
         if mode_req == "mp4" and kind == "video":
-            # Seekable remux for Safari-class browsers.
+            # Seekable remux for Safari-class browsers. "transcode" hint:
+            # /remux must fully re-encode (slow) vs stream-copy (fast), so
+            # the frontend can warn about the wait up front.
+            tc = plan_from_probe(probe(["ffprobe", "-v", "error"], target)) == "transcode"
             return jsonify({"url": f"/remux?path={urllib.parse.quote(rel)}",
-                            "mode": "mp4", "name": target.name})
+                            "mode": "mp4", "name": target.name, "transcode": tc})
         force = mode_req == "stream"
         want_stream = force or (
             kind == "video" and target.suffix.lower() not in NATIVE_VIDEO_EXTS
@@ -1021,17 +1024,29 @@ def create_app():
     @app.get("/remux")
     def remux():
         """Seekable, length-known MP4 (stream copy where possible). This is
-        what Safari needs; served with full Range support via send_file."""
+        what Safari needs; served with full Range support via send_file.
+        Non-copyable codecs mean a full video transcode, so those build
+        inside the global transcode pool (same cap as /stream, 503 when
+        saturated)."""
         rel = request.args.get("path", "")
         target = safe_resolve(root, rel)
         if not target.is_file() or classify(target.suffix) != "video":
             abort(404)
+        force = request.args.get("transcode") == "1"
+        slot = None
+        probed = probe(["ffprobe", "-v", "error"], target)
+        if force or plan_from_probe(probed) == "transcode":
+            slot = pool.acquire()
+            if slot is None:
+                return Response("transcode pool busy\n", status=503)
         try:
             dest = ensure_remux(root, remux_dir, remux_max_gb, remux_max_age_days,
-                                target, rel,
-                                force_transcode=request.args.get("transcode") == "1")
+                                target, rel, force_transcode=force)
         except subprocess.CalledProcessError as exc:
             return Response(f"remux failed: {exc}\n", status=500)
+        finally:
+            if slot is not None:
+                pool.release(slot)
         return send_file(dest, mimetype="video/mp4", conditional=True,
                          max_age=86400 * 7)
 

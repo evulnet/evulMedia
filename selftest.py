@@ -71,6 +71,8 @@ def main():
         check("sign stream carries dur field", "dur" in s and s["dur"] >= 0)
         r = c.get("/api/sign?path=" + urllib.parse.quote(rel) + "&mode=mp4")
         check("sign video mode=mp4 -> /remux", "/remux" in json.loads(r.data).get("url", ""))
+        check("sign mp4 carries transcode hint",
+              isinstance(json.loads(r.data).get("transcode"), bool))
         check("remux 404 on non-media", c.get("/remux?path=nope.txt").status_code == 404)
         check("remux 404 on missing file", c.get("/remux?path=zzz.mkv").status_code == 404)
         if os.environ.get("MB_SUBS") == "1":
