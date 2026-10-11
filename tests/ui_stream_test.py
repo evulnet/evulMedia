@@ -210,16 +210,40 @@ def run_ui(sync_playwright):
         check("subs jail rejected",
               _status(f"{BASE}/subs?path=test_sub.mkv&key=f:..%2Fnope") in (400, 404))
 
-        # UI: opt in via the cog, open the video, expect an attached track
+        # UI: opt in via the cog, open the video, CC button paints cues itself
+        # (self-rendered overlay, not <track>: Safari won't list dynamic tracks)
         page.keyboard.press("Escape")
         page.locator("#cogBtn").click()
         page.locator("#subsChk").check()
         page.goto(f"{BASE}/media/test_sub.mkv")
         page.locator("video").wait_for(timeout=60000)
+        page.wait_for_selector(".ccctl", timeout=15000)
+        check("UI: exactly one CC button", page.locator(".ccctl").count() == 1)
+        page.click(".ccctl")                      # off -> track 1
+        page.evaluate("""() => { const v = document.querySelector('video');
+            try { v.currentTime = 3; v.pause(); } catch (e) {}
+            v.dispatchEvent(new Event('timeupdate')); }""")
         page.wait_for_function(
-            "() => document.querySelector('video').textTracks.length >= 1", timeout=15000)
-        check("UI: subtitle tracks attached to player",
-              page.evaluate("() => document.querySelector('video').textTracks[0].label !== ''"))
+            "() => document.querySelector('.subov').textContent.includes('hello subs')",
+            timeout=20000)
+        check("UI: CC on paints a cue", True)
+        page.click(".ccctl")                      # track 1 -> track 2 (sidecar)
+        page.wait_for_function(
+            "() => /cc (?!off)/i.test(document.querySelector('.ccctl').textContent)",
+            timeout=5000)
+        check("UI: CC cycles to second track", True)
+        page.click(".ccctl")                      # -> off, overlay clears
+        page.wait_for_function("() => /cc off/i.test(document.querySelector('.ccctl').textContent)",
+                               timeout=5000)
+        check("UI: CC cycles back to off",
+              page.text_content(".subov").strip() == "")
+        # stepping media must never stack CC buttons
+        page.keyboard.press("ArrowRight")
+        page.locator("video").wait_for(timeout=30000)
+        page.wait_for_timeout(2500)
+        check("UI: CC button not duplicated on media switch",
+              page.locator(".ccctl").count() <= 1,
+              f"count={page.locator('.ccctl').count()}")
 
         browser.close()
 

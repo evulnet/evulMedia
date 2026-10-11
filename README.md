@@ -50,7 +50,9 @@ Every box above is browsable, streamable and shareable via URL.
   just show as plain files (graceful degradation).
 - **Subtitles** (opt-in, `MB_SUBS=1`): embedded text tracks in MKV/M4V and
   sidecar `.srt`/`.ass`/`.vtt` files are converted to WebVTT on demand and
-  appear in the player's native subtitle menu. No video re-encode ever.
+  painted by a built-in CC button in the player bar (cycles: off → track 1
+  → track 2 → …). Self-rendered on purpose: Safari never lists dynamically
+  inserted `<track>` elements in its caption menu. No video re-encode ever.
 - **Audio** plays inline (album/audiobook stepping with arrow keys).
 - **PDFs** open in a near-fullscreen native viewer.
 - **Filenames-only cache**: a directory walk never blocks a request;

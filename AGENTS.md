@@ -173,8 +173,9 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   (created via `rar`, read via rarfile+lsar/unar). The `unrar`/`bsdtar`/`7z`
   backends and password-protected RARs remain unverified.
 - Subtitles verified for embedded SRT-in-MKV and sidecar SRT in headless
-  Chromium (conversion via ffmpeg 6.1); ASS/SSA conversion and Safari's
-  subtitle menu unverified.
+  Chromium and on Safari (macOS) through the self-rendered CC overlay —
+  deliberately no reliance on native `<track>` menus (Safari does not list
+  dynamically inserted tracks). ASS/SSA styling fidelity unverified.
 - UI tests run headless Chromium only; mobile browsers untested.
 
 ## Do-not-touch list

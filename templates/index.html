@@ -125,6 +125,12 @@ h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
   border-radius:6px; padding:.2rem .35rem; font-size:.8rem; }
 #settings .hint { color:var(--dim); font-size:.72rem; border-top:1px solid var(--line); padding-top:.5rem; }
 body.no-size .label .meta { display:none; }
+.subov { position:absolute; left:5%; right:5%; bottom:10%; text-align:center;
+  color:#fff; font-size:clamp(1rem,2.4vw,1.7rem); line-height:1.35; font-weight:600;
+  text-shadow:0 0 4px #000, 0 2px 4px #000; pointer-events:none; white-space:pre-wrap; }
+.ccctl { cursor:pointer; color:var(--acc); font-size:.8rem; user-select:none;
+  margin-left:auto; padding:0 .3rem; }
+.ccctl:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -307,7 +313,8 @@ async function showCurrent(forceKind){
   // playback preference from the settings cog: auto | seekable | transcode
   if (!forceKind && !m.url && m.kind === 'video' && pbMode() !== 'auto')
     forceKind = pbMode() === 'seekable' ? 'mp4' : TC_KIND;
-  modal.querySelector('.bar').querySelectorAll('.seekctl').forEach(n => n.remove());
+  modal.querySelector('.bar').querySelectorAll('.seekctl, .ccctl').forEach(n => n.remove());
+  const gen = ++uiGen;                       // invalidate pending async UI from previous item
   modal.querySelector('.title').textContent = m.name;
   if ((forceKind === 'mp4' && m.mode !== 'mp4') || forceKind === 'mp4tc')
     stage.innerHTML = '<div class="status" style="color:#9cf"><span class="spin"></span>' +
@@ -336,17 +343,7 @@ async function showCurrent(forceKind){
   if (m.kind === 'video' || m.kind === 'audio') {
     const el = stage.querySelector('video, audio');
     if (m.kind === 'video' && m.mode === 'stream') { m.base = url; m.offset = 0; attachStreamControls(el, m); }
-    if (subsOn()) {
-      fetch('/api/subs' + q(m.path)).then(r => r.ok ? r.json() : {subs: []}).then(j => {
-        (j.subs || []).forEach((s, i) => {
-          const tr = document.createElement('track');
-          tr.kind = 'subtitles'; tr.srclang = s.lang || '';
-          tr.label = s.label || ('subtitle ' + (i + 1));
-          tr.src = '/subs' + q(m.path) + '&key=' + encodeURIComponent(s.key);
-          el.appendChild(tr);
-        });
-      }).catch(() => {});
-    }
+    if (m.kind === 'video' && subsOn()) setupSubs(el, m, gen);
     el.addEventListener('error', () => {
       // Safari rejects the chunked /stream pipe: fall back to the seekable
       // MP4 remux, then to a file/pipe transcode (per-browser), then give up.
@@ -446,6 +443,70 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
   if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
 });
+
+/** Subtitles: self-rendered (no <track>; Safari won't reliably load those).
+ *  CC button cycles: off -> track1 -> track2 -> ... -> off. */
+let uiGen = 0;
+async function setupSubs(el, m, gen){
+  let list = [];
+  try { list = (await (await fetch('/api/subs' + q(m.path))).json()).subs || []; }
+  catch (e) { return; }
+  if (gen !== uiGen || !list.length) return;   // user moved on; drop stale setup
+  m.subCache = m.subCache || {};
+  let idx = -1, cues = null;
+  const bar = modal.querySelector('.bar');
+  const ov = document.createElement('div'); ov.className = 'subov';
+  modal.querySelector('.stage').appendChild(ov);
+  const btn = document.createElement('span'); btn.className = 'ccctl';
+  const name = i => (list[i].label || ('#' + (i + 1)));
+  const draw = () => { btn.textContent = idx < 0 ? 'cc off' : 'cc ' + name(idx); };
+  async function load(){
+    const s = list[idx];
+    if (m.subCache[s.key]) { cues = m.subCache[s.key]; return; }
+    btn.textContent = 'cc \u23f3';
+    try {
+      cues = m.subCache[s.key] =
+        parseVTT(await (await fetch('/subs' + q(m.path) + '&key=' + encodeURIComponent(s.key))).text());
+    } catch (e) { cues = []; }
+  }
+  function sync(){
+    if (idx < 0 || !cues) { ov.textContent = ''; return; }
+    const t = (el.currentTime || 0) + (m.offset || 0);
+    const c = cues.find(x => t >= x.t0 && t <= x.t1);
+    const txt = c ? c.txt : '';
+    if (ov.textContent !== txt) ov.textContent = txt;
+  }
+  btn.addEventListener('click', async () => {
+    idx = (idx + 1) % (list.length + 1);
+    if (idx >= list.length) { idx = -1; cues = null; } else await load();
+    draw(); sync();
+  });
+  el.addEventListener('timeupdate', sync);
+  bar.appendChild(btn); draw();
+}
+function parseVTT(text){
+  const out = [];
+  for (const block of text.split(/\r?\n\r?\n/)){
+    const lines = block.split(/\r?\n/);
+    const ti = lines.findIndex(l => l.includes('-->'));
+    if (ti < 0) continue;
+    const [a, bRaw] = lines[ti].split('-->');
+    const t0 = vts(a), t1 = vts((bRaw || '').trim().split(/\s/)[0]);
+    if (t0 == null || t1 == null) continue;
+    const txt = lines.slice(ti + 1).join('\n').replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&rlm;/g, '').replace(/&lrm;/g, '').trim();
+    if (txt) out.push({t0, t1, txt});
+  }
+  return out;
+}
+function vts(s){
+  const p = s.trim().split(':'); if (!p.length) return null;
+  const x = p.pop().split('.'); let t = parseFloat(x[0]);
+  if (p.length) t += parseFloat(p.pop()) * 60;
+  if (p.length) t += parseFloat(p.pop()) * 3600;
+  return isFinite(t) ? t : null;
+}
 
 // ---- fullscreen + settings popover ------------------------------------
 function fsEl(){ return document.fullscreenElement || document.webkitFullscreenElement; }

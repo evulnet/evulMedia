@@ -1067,9 +1067,9 @@ def create_app():
             title = (tags.get("title") or "").strip()
             out.append({"key": f"e:{idx}", "lang": lang,
                         "label": title or lang or f"subtitle {idx + 1}"})
-        for name, lang in sidecar_subs(target):
+        for i, (name, lang) in enumerate(sidecar_subs(target)):
             out.append({"key": "f:" + name, "lang": lang,
-                        "label": Path(name).stem.split(".")[-1] if lang else name})
+                        "label": lang.upper() if lang else f"subtitles {i + 1}"})
         return jsonify({"subs": out})
 
     @app.get("/subs")
