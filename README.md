@@ -63,7 +63,7 @@ Every box above is browsable, streamable and shareable via URL.
 - **Self-expiring caches**: remux and thumbnail caches are LRU + age GC'd
   on service start and every 6 h.
 - **Self-test suite** (`selftest.py`) that deploys can run as a smoke test
-  (30 checks), and a Playwright browser test for the player UI
+  (34 checks), and a Playwright browser test for the player UI
   (`tests/ui_stream_test.py`, dev-only — needs Chromium).
 
 ## Requirements
@@ -191,7 +191,7 @@ Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
 ```
 app.py                  the whole server
 wsgi.py                 gunicorn entrypoint
-selftest.py             30-check smoke suite (read-only, safe on prod)
+selftest.py             34-check smoke suite (read-only, safe on prod)
 templates/index.html    single-page frontend (no build step, no CDN)
 tests/ui_stream_test.py Playwright UI test for stream seek/pause/seekable
 systemd/evulmedia@.service

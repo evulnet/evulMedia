@@ -18,7 +18,7 @@ Emby/Jellyfin. Keep that spirit in every change: fewer moving parts, not more.
 ```
 app.py                  the entire server (single file, ~1050 lines; see section below)
 wsgi.py                 gunicorn entrypoint (calls create_app())
-selftest.py             32-check smoke suite; read-only, safe to run on prod
+selftest.py             34-check smoke suite; read-only, safe to run on prod
 templates/index.html    whole frontend: one HTML file, inline CSS/JS, no build step,
                         no frameworks, no CDN
 tests/ui_stream_test.py Playwright (Chromium) UI test for stream seek/pause/seekable;
@@ -46,11 +46,11 @@ empty in dev; production requires it.
 
 ```bash
 # 1) Smoke/logic suite — run against real env on deploys:
-venv/bin/python selftest.py                       # must exit 0; 32 checks
+venv/bin/python selftest.py                       # must exit 0; 34 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
-venv/bin/python tests/ui_stream_test.py           # 17 checks; prints SKIP (exit 0) without deps
+venv/bin/python tests/ui_stream_test.py           # 26 checks; prints SKIP (exit 0) without deps
 
 # 3) Lint: no configured linter; keep `python3 -m py_compile app.py selftest.py` clean
 ```
@@ -93,7 +93,10 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   The video pipeline itself never touches subs (`/stream` keeps `-sn`).
   Bitmap tracks (PGS/DVD) are skipped. Sidecar access via `/subs` is
   double-jail-checked: the key must match an enumerated sibling AND pass
-  `safe_resolve`.
+  `safe_resolve`. Rendering is deliberately **self-rendered** (`parseVTT`
+  + cue overlay driven by `timeupdate`, offset-aware for pseudo-seek):
+  Safari does not list dynamically inserted `<track>` elements, so native
+  caption menus are not an option; do not "simplify" back to `<track>`.
 - **RAR/CBR** ride the same virtual-folder code as zip when `rarfile` is
   installed *and* an external tool (`unar`/`unrar`/`bsdtar`/`7z`) exists;
   `.rar/.cbr` degrade to plain files otherwise. `ARCHIVE_EXTS` is decided
@@ -196,7 +199,7 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
 - GitHub account: **nkavassalis**; verify with `gh auth status` before
   pushing (token lives in `gh`, never in the repo).
 - Work on feature branches; open PRs; PRs must have `selftest.py` green
-  (28+/28) and, for any player/UI change, `tests/ui_stream_test.py` green
+  (34/34) and, for any player/UI change, `tests/ui_stream_test.py` green
   (or an explicit SKIP note plus manual verification described in the PR).
 - Never push with failing checks; never force-push master; never commit
   anything resembling a secret, hostname, private IP, path under a real
