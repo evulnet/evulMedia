@@ -18,7 +18,7 @@ Emby/Jellyfin. Keep that spirit in every change: fewer moving parts, not more.
 ```
 app.py                  the entire server (single file, ~1050 lines; see section below)
 wsgi.py                 gunicorn entrypoint (calls create_app())
-selftest.py             28-check smoke suite; read-only, safe to run on prod
+selftest.py             30-check smoke suite; read-only, safe to run on prod
 templates/index.html    whole frontend: one HTML file, inline CSS/JS, no build step,
                         no frameworks, no CDN
 tests/ui_stream_test.py Playwright (Chromium) UI test for stream seek/pause/seekable;
@@ -46,7 +46,7 @@ empty in dev; production requires it.
 
 ```bash
 # 1) Smoke/logic suite — run against real env on deploys:
-venv/bin/python selftest.py                       # must exit 0; 28 checks
+venv/bin/python selftest.py                       # must exit 0; 30 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
@@ -72,9 +72,12 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
 - **Playback paths, cheapest first:** natively playable files → `/files`;
   browser-hostile containers → `/stream` (fragmented-MP4 pipe from ffmpeg,
   copy-first, no index); Safari-class → `/remux` (one-time faststart MP4
-  cache, fully Range-seekable); exotic codecs → forced transcode via
-  `?transcode=1`. Frontend falls back `/stream → /remux → forced transcode`
-  automatically on media errors.
+  cache, fully Range-seekable); exotic codecs → force transcode. On Safari
+  the forced transcode is always **file-based** (`/remux?transcode=1`,
+  detected client-side via `IS_SAFARI`) because Safari rejects the chunked
+  live pipe entirely; other browsers use the live pipe (`/stream?transcode=1`).
+  Frontend falls back `/stream → /remux → forced transcode` automatically
+  on media errors.
 - **Live-stream pseudo-seek:** `/stream?...&start=SECONDS` input-seeks
   (`-ss` *before* `-i`) so the output timeline restarts at 0; the frontend
   (`attachStreamControls` in index.html) tracks the content offset and
@@ -82,15 +85,25 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   transcode slot) and shows a resume overlay — this is why pause no longer
   burns `MB_STALL_TIMEOUT`. Do not replace with `-copyts`/output seek
   without browser-testing all fallback paths.
+- **Client preferences** live in `localStorage` only (never the server):
+  `mbPbMode` (video playback: auto|seekable|transcode), `mbTheme`,
+  `mbAutoplay`, `mbShowSize`, plus legacy `mbSeekable` (migrated as a
+  fallback inside `pbMode()`). UI lives in the ⚙ settings popover; the
+  settings gear is deliberately unreachable while the lightbox is open
+  (maintainer-approved design: close the lightbox first, via Esc or ✕,
+  to change playback mode).
 - **TranscodePool** (app.py): flock-based slot files in `MB_SLOTS_DIR` cap
   concurrent ffmpeg across *all workers and instances*; every child runs in
   its own process group; a watchdog thread SIGKILLs groups whose generator
   stopped making progress (covers abandoned generators on client disconnect).
   Keep new subprocess spawns inside pool.register/retire discipline.
 - **Caches are content-addressed and disposable:** thumbnails keyed
-  `sha1(relpath|size|mtime)`, remuxes `sha1(fmt|root|rel|size|mtime_ns)`
-  (bump `REMUX_FMT` to invalidate all). Everything under `data/` can be
-  deleted at any time. GC runs on create + every 6 h, atime-based.
+  `sha1(relpath|size|mtime)`, remuxes `sha1(fmt|root|rel|size|mtime_ns|transcode?)`
+  (bump `REMUX_FMT` to invalidate all; the `transcode?` flag was added with
+  the Safari file-transcode fix — old flag-less entries become orphans and
+  are reaped by atime GC, which is the migration plan). Everything under
+  `data/` can be deleted at any time. GC runs on create + every 6 h,
+  atime-based.
 - **Jail discipline:** all user paths flow through `safe_resolve()` /
   `split_archive()` — reject `..`, dotfiles, symlink escapes, archive-member
   traversal; zip entries size-capped (`read_member`), encrypted entries

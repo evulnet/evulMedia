@@ -56,7 +56,7 @@ Every box above is browsable, streamable and shareable via URL.
 - **Self-expiring caches**: remux and thumbnail caches are LRU + age GC'd
   on service start and every 6 h.
 - **Self-test suite** (`selftest.py`) that deploys can run as a smoke test
-  (28 checks), and a Playwright browser test for the player UI
+  (30 checks), and a Playwright browser test for the player UI
   (`tests/ui_stream_test.py`, dev-only — needs Chromium).
 
 ## Requirements
@@ -101,7 +101,7 @@ MB_ROOT=/path/to/media MB_THUMBS=$PWD/data/thumbs/dev venv/bin/python app.py
 | `mkv`, `avi`, `ts`, wmv, … (Chrome-class) | `/stream` — ffmpeg pipes **fragmented MP4** | video `-c copy` when h264/HEVC/VP9/AV1; audio→AAC when needed; full h264 transcode last resort. Seek via reconnect (`/stream?...&start=SECONDS`) |
 | same files (Safari-class)     | `/remux` — **one-time MKV→faststart-MP4** cache | copy, ~5 s/episode, then instant + seekable |
 | unsupported audio (e.g. FLAC on Safari) | `/stream` audio-only AAC                     | |
-| exotic/old codecs             | `/stream` h264 transcode, or the "transcode playback" link | |
+| exotic/old codecs             | `/stream` h264 transcode, or force transcode via the ⚙ settings tab | |
 
 The player auto-falls-back `/stream → /remux → forced transcode`, so one
 click usually finds the working path for your browser. HEVC is tagged
@@ -112,10 +112,13 @@ never touches ffmpeg.
 seeks by reconnecting with `?start=` (ffmpeg input-seeks, which is instant
 in copy mode) and tracks the content offset for you. Pausing closes the
 pipe immediately (freeing the transcode slot) and a ▶ overlay resumes at
-the remembered position. Tick **seekable** in the player bar to instead
-play from the `/remux` faststart MP4 — fully seekable via native controls,
-at the cost of a one-time remux per file; the choice is remembered per
-browser.
+the remembered position. The **⚙ settings** tab (header) lets you pick a
+permanent video-playback mode — *auto*, *seekable MP4* (play from the
+`/remux` faststart file, fully seekable via native controls, one-time
+remux per file), or *force transcode* — plus theme, autoplay, whether
+file sizes show, and a fullscreen lightbox (⛶ / `F`, double-click an
+image). Safari gets its forced transcode as a file (`/remux?transcode=1`),
+never the live pipe. All preferences persist in `localStorage`.
 
 **Why so many paths:** browsers (not servers) decide what they decode.
 Safari refuses chunked range-less streams; Chrome can't decode HEVC
@@ -180,7 +183,7 @@ Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
 ```
 app.py                  the whole server
 wsgi.py                 gunicorn entrypoint
-selftest.py             28-check smoke suite (read-only, safe on prod)
+selftest.py             30-check smoke suite (read-only, safe on prod)
 templates/index.html    single-page frontend (no build step, no CDN)
 tests/ui_stream_test.py Playwright UI test for stream seek/pause/seekable
 systemd/evulmedia@.service

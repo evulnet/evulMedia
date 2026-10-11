@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Self-test for the media browser. Load the prod env, e.g. via sudo bash -c:
+"""Self-test for the media browser. Run against the SAME env the service uses:
 
-    sudo /opt/evulmedia/venv/bin/python /opt/evulmedia/selftest.py
+    cd /opt/evulmedia && sudo -u www-data env $(grep -v '^#' env/media.env | xargs) venv/bin/python selftest.py
 
 Exits non-zero on any failure. Safe: read-only except a scratch remux dir.
 """
@@ -70,6 +70,8 @@ def main():
         check("sign stream carries dur field", "dur" in s and s["dur"] >= 0)
         r = c.get("/api/sign?path=" + urllib.parse.quote(rel) + "&mode=mp4")
         check("sign video mode=mp4 -> /remux", "/remux" in json.loads(r.data).get("url", ""))
+        check("remux 404 on non-media", c.get("/remux?path=nope.txt").status_code == 404)
+        check("remux 404 on missing file", c.get("/remux?path=zzz.mkv").status_code == 404)
         # /stream start-param validation (400 before any ffmpeg work)
         check("stream rejects non-numeric start",
               c.get("/stream?path=" + urllib.parse.quote(rel) + "&start=abc").status_code == 400)
