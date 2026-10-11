@@ -57,13 +57,14 @@ Every box above is browsable, streamable and shareable via URL.
 - **PDFs** open in a near-fullscreen native viewer.
 - **Filenames-only cache**: a directory walk never blocks a request;
   listings revalidate on directory mtime or TTL (default 5 min).
-- **Machine-global transcode pool** (default 2 concurrent ffmpeg streams)
+- **Machine-global transcode pool** (default 2 concurrent ffmpeg encodes:
+  live streams *and* `/remux` transcode builds)
   with process-group kill, disconnect cleanup, and a stall watchdog, so
   transcoding can't fork-bomb your server.
 - **Self-expiring caches**: remux and thumbnail caches are LRU + age GC'd
   on service start and every 6 h.
 - **Self-test suite** (`selftest.py`) that deploys can run as a smoke test
-  (34 checks), and a Playwright browser test for the player UI
+  (35 checks), and a Playwright browser test for the player UI
   (`tests/ui_stream_test.py`, dev-only — needs Chromium).
 
 ## Requirements
@@ -106,7 +107,8 @@ MB_ROOT=/path/to/media MB_THUMBS=$PWD/data/thumbs/dev venv/bin/python app.py
 |-------------------------------|-----------------------------------------------|-------|
 | images, native audio/mp4/webm/mov, PDFs | `/files/...` (Caddy `file_server`, HMAC-tokened) | zero-copy, real `Range`/seek |
 | `mkv`, `avi`, `ts`, wmv, … (Chrome-class) | `/stream` — ffmpeg pipes **fragmented MP4** | video `-c copy` when h264/HEVC/VP9/AV1; audio→AAC when needed; full h264 transcode last resort. Seek via reconnect (`/stream?...&start=SECONDS`) |
-| same files (Safari-class)     | `/remux` — **one-time MKV→faststart-MP4** cache | copy, ~5 s/episode, then instant + seekable |
+| same files (Safari-class)     | `/remux` — **one-time MKV→faststart-MP4** cache | copy, ~5 s/episode, then instant + seekable; legacy codecs (mpeg4/Xvid…) fully transcode inside the pool — can take minutes |
+| legacy mpeg4/Xvid/DivX (AVI era) | `/remux?transcode=1` or "force transcode" setting → cached h264 MP4 | deliberately never stream-copied: Safari visibly corrupts these bitstreams (B-frames/GMC) even when it claims to decode them |
 | unsupported audio (e.g. FLAC on Safari) | `/stream` audio-only AAC                     | |
 | exotic/old codecs             | `/stream` h264 transcode, or force transcode via the ⚙ settings tab | |
 
@@ -191,7 +193,7 @@ Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
 ```
 app.py                  the whole server
 wsgi.py                 gunicorn entrypoint
-selftest.py             34-check smoke suite (read-only, safe on prod)
+selftest.py             35-check smoke suite (read-only, safe on prod)
 templates/index.html    single-page frontend (no build step, no CDN)
 tests/ui_stream_test.py Playwright UI test for stream seek/pause/seekable
 systemd/evulmedia@.service

@@ -18,7 +18,7 @@ Emby/Jellyfin. Keep that spirit in every change: fewer moving parts, not more.
 ```
 app.py                  the entire server (single file, ~1050 lines; see section below)
 wsgi.py                 gunicorn entrypoint (calls create_app())
-selftest.py             34-check smoke suite; read-only, safe to run on prod
+selftest.py             35-check smoke suite; read-only, safe to run on prod
 templates/index.html    whole frontend: one HTML file, inline CSS/JS, no build step,
                         no frameworks, no CDN
 tests/ui_stream_test.py Playwright (Chromium) UI test for stream seek/pause/seekable;
@@ -46,7 +46,7 @@ empty in dev; production requires it.
 
 ```bash
 # 1) Smoke/logic suite — run against real env on deploys:
-venv/bin/python selftest.py                       # must exit 0; 34 checks
+venv/bin/python selftest.py                       # must exit 0; 35 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
@@ -114,6 +114,12 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   its own process group; a watchdog thread SIGKILLs groups whose generator
   stopped making progress (covers abandoned generators on client disconnect).
   Keep new subprocess spawns inside pool.register/retire discipline.
+  `/remux` now acquires a slot too whenever its build will re-encode
+  (non-copyable codec or `?transcode=1`); copy builds stay slot-free;
+  saturation returns 503 after a 20 s grace. Legacy mpeg4/Xvid/DivX is
+  intentionally transcode-only: Safari "decodes" AVI-era bitstreams with
+  visible corruption (B-frames/GMC), so do not add mpeg4 to
+  COPY_VIDEO_CODECS.
 - **Caches are content-addressed and disposable:** thumbnails keyed
   `sha1(relpath|size|mtime)`, remuxes `sha1(fmt|root|rel|size|mtime_ns|transcode?)`
   (bump `REMUX_FMT` to invalidate all; the `transcode?` flag was added with
@@ -199,7 +205,7 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
 - GitHub account: **nkavassalis**; verify with `gh auth status` before
   pushing (token lives in `gh`, never in the repo).
 - Work on feature branches; open PRs; PRs must have `selftest.py` green
-  (34/34) and, for any player/UI change, `tests/ui_stream_test.py` green
+  (35/35) and, for any player/UI change, `tests/ui_stream_test.py` green
   (or an explicit SKIP note plus manual verification described in the PR).
 - Never push with failing checks; never force-push master; never commit
   anything resembling a secret, hostname, private IP, path under a real
