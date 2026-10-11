@@ -50,7 +50,7 @@ venv/bin/python selftest.py                       # must exit 0; 35 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
-venv/bin/python tests/ui_stream_test.py           # 31 checks; prints SKIP (exit 0) without deps
+venv/bin/python tests/ui_stream_test.py           # 35 checks; prints SKIP (exit 0) without deps
 
 # 3) Lint: no configured linter; keep `python3 -m py_compile app.py selftest.py` clean
 ```
@@ -128,13 +128,23 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   (`qsv_video_args()`); otherwise every path falls back to
   `x264_video_args()` (`libx264 -preset superfast`). Never inline encoder
   args elsewhere than those two helpers.
-- **`/remux` cache-hit contract:** the route checks `remux_cache_path()`
-  and serves BEFORE probing or acquiring a pool slot, so cache hits stay
-  ~0 ms even when the pool is saturated; builds needing a re-encode take
-  a slot and answer 503 + `Retry-After: 10` when saturation persists
-  (mirrors `/stream`). Failed builds log the last 600 B of ffmpeg stderr
-  to the service log and return a bare 500 — command lines (which contain
-  library paths) must never reach HTTP bodies.
+- **`/remux` detached-build contract:** builds NEVER run inside the request
+  (Safari aborts video loads after ~1 min of silence). Cached → serve
+  (short-circuit before probe/slot, ~0 ms); otherwise a daemon thread
+  spawns and the route answers 409 `{"state":"building"}` + `Retry-After: 5`;
+  `?status=1` returns `building|ready|error` WITHOUT ever spawning or
+  respawning, and plain GET is the only path that may respawn an errored
+  job (user retry). Transcode-mode builds queue for a pool slot up to
+  600 s (a queued build waits, not fails). The frontend mounts `video.src`
+  only on `ready` and routes `error` into the failover chain. Failed
+  builds log ffmpeg stderr (truncated) and surface no command lines —
+  argv contains library paths and must never reach HTTP bodies. Orphaned
+  `.part` debris from killed builds is swept by `_remux_gc` after 6 h.
+  NOTE: `remux_jobs` is per-process (multi-worker gunicorn may duplicate a
+  spawn; `ensure_remux`'s flock serializes them and the cache wins).
+- **Remux audio copies AC-3/E-AC-3 through** (Safari decodes them natively,
+  mp4 carries `ac-3`/`ec-3` tags); `/stream` keeps the conservative
+  aac/mp3-copy rule for Chrome-class. Do not "unify" the two lists.
 - **Caches are content-addressed and disposable:** thumbnails keyed
   `sha1(relpath|size|mtime)`, remuxes `sha1(fmt|root|rel|size|mtime_ns|transcode?)`
   (bump `REMUX_FMT` to invalidate all; the `transcode?` flag was added with

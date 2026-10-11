@@ -66,6 +66,7 @@ def main():
          "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac",
          "-shortest", "-y", str(clip)],
         check=True, timeout=120)
+    (media / "broken.avi").write_bytes(os.urandom(4096))   # fails any build
 
     # second clip: same video + one embedded SRT track + one sidecar SRT
     srt = media / "sub_src.srt"
@@ -176,6 +177,10 @@ def run_ui(sync_playwright, slots_dir):
         page.goto(f"{BASE}/media/test_clip.mkv")
         v = page.locator("video")
         v.wait_for(timeout=60000)  # remux sign + one-time remux run
+        page.wait_for_function(
+            "() => (document.querySelector('video') || {}).src && " +
+            "document.querySelector('video').src.includes('/remux')",
+            timeout=60000)   # src attaches once the (async) build reports ready
         src = page.evaluate("() => document.querySelector('video').src")
         check("UI: seekable toggle switches to /remux", "/remux" in src, src)
         page.evaluate("() => document.querySelector('video').play()")
@@ -250,29 +255,47 @@ def run_ui(sync_playwright, slots_dir):
         import fcntl
         lk = open(Path(slots_dir) / "job0.lock", "w")
         fcntl.flock(lk, fcntl.LOCK_EX)
-        try:
+        try:                                    # build spawned but slot-held
             urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1")
-            check("remux busy returns 503", False, "no exception raised")
+            check("remux build-in-flight returns 409", False, "no exception")
         except urllib.error.HTTPError as e:
-            check("remux busy returns 503", e.code == 503, str(e.code))
-            check("remux 503 carries Retry-After",
-                  e.headers.get("Retry-After") == "10",
+            check("remux build-in-flight returns 409", e.code == 409, str(e.code))
+            check("409 carries Retry-After", e.headers.get("Retry-After") == "5",
                   str(e.headers.get("Retry-After")))
-        fcntl.flock(lk, fcntl.LOCK_UN)
-        t0 = time.time()
+        st = js.load(urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1&status=1"))
+        check("status endpoint reports building", st.get("state") == "building", str(st))
+        fcntl.flock(lk, fcntl.LOCK_UN)          # queued job may proceed
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            st = js.load(urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1&status=1"))
+            if st.get("state") == "ready":
+                break
+            time.sleep(0.5)
+        check("detached build reaches ready", st.get("state") == "ready", str(st))
         head = urllib.request.urlopen(
             f"{BASE}/remux?path=test_clip.mkv&transcode=1").read(16)
-        build_dt = time.time() - t0
-        check("forced transcode build serves MP4",
-              head[4:8] == b"ftyp" and build_dt < 60, f"{build_dt:.1f}s")
-        t0 = time.time()
-        urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1")
-        hit_dt = time.time() - t0
-        fcntl.flock(lk, fcntl.LOCK_EX)   # cache hit must not need the pool
+        check("ready remux serves MP4", head[4:8] == b"ftyp")
+
+        # --- error contract: broken file -> error state that status polls
+        #     can OBSERVE (respawning only on plain GET, never on status) ---
+        st = None
+        for _ in range(40):
+            st = js.load(urllib.request.urlopen(f"{BASE}/remux?path=broken.avi&status=1"))
+            if st.get("state") == "error":
+                break
+            time.sleep(0.5)
+        check("broken build reaches error state", st.get("state") == "error", str(st))
+        st2 = js.load(urllib.request.urlopen(f"{BASE}/remux?path=broken.avi&status=1"))
+        check("status poll observes (does not respawn) error",
+              st2.get("state") == "error", str(st2))
+        fcntl.flock(lk, fcntl.LOCK_EX)          # cache hit must not need the pool
         try:
+            t0 = time.time()
             urllib.request.urlopen(f"{BASE}/remux?path=test_clip.mkv&transcode=1")
+            hit_dt = time.time() - t0
             ok_busy_hit = True
         except urllib.error.HTTPError:
+            hit_dt = 99
             ok_busy_hit = False
         fcntl.flock(lk, fcntl.LOCK_UN)
         check("cached remux serves with pool saturated", ok_busy_hit)

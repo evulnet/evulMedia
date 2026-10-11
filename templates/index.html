@@ -334,8 +334,9 @@ async function showCurrent(forceKind){
   }
   const url = m.url || '/view' + q(m.path);
   const ap = autoplayOn() ? ' autoplay' : '';
+  const isBuild = m.kind === 'video' && m.mode === 'mp4';   // async /remux
   stage.innerHTML = m.kind === 'video'
-    ? '<video src="' + url + '" controls' + ap + '></video>'
+    ? '<video' + (isBuild ? '' : ' src="' + url + '"') + ' controls' + ap + '></video>'
     : m.kind === 'audio'
     ? '<audio src="' + url + '" controls' + ap + '></audio>'
     : m.kind === 'pdf'
@@ -344,20 +345,37 @@ async function showCurrent(forceKind){
   if (m.kind === 'video' || m.kind === 'audio') {
     const el = stage.querySelector('video, audio');
     if (m.kind === 'video' && m.mode === 'stream') { m.base = url; m.offset = 0; attachStreamControls(el, m); }
-    if (m.kind === 'video' && m.mode === 'mp4') {
-      // Cover the black box while /remux builds (a transcode can take minutes).
+    if (isBuild) {
+      // Detached build: poll /remux?status=1 (first poll also spawns it),
+      // mount the source only when the file is ready. No browser ever waits
+      // on a multi-minute build, so no mid-build timeout kills playback.
       const ov = document.createElement('div');
       ov.className = 'status';
       ov.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);border-radius:8px';
       ov.innerHTML = '<span class="spin"></span>' + (m.transcode
         ? 'transcoding \u2014 long files can take minutes\u2026'
-        : 'preparing MP4 remux\u2026');
+        : 'building seekable MP4\u2026');
       stage.appendChild(ov);
-      el.addEventListener('loadedmetadata', () => ov.remove(), {once:true});
-      el.addEventListener('error', () => ov.remove(), {once:true});
+      (async () => {
+        const my = gen;
+        const su = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'status=1';
+        const every = ms => new Promise(r => setTimeout(r, ms));
+        for (let i = 0; i < 800; i++) {          // up to ~40 min
+          let st = 'idle';
+          try { st = (await (await fetch(su)).json()).state; } catch (e) {}
+          if (my !== uiGen) return;              // user moved on (build continues)
+          if (st === 'ready') break;
+          if (st === 'error') { ov.remove(); failover(); return; }
+          await every(i < 20 ? 1500 : 3000);
+        }
+        if (my !== uiGen) return;
+        el.src = url;
+        el.addEventListener('loadedmetadata', () => ov.remove(), {once:true});
+        el.addEventListener('error', () => { ov.remove(); failover(); }, {once:true});
+      })();
     }
     if (m.kind === 'video' && subsOn()) setupSubs(el, m, gen);
-    el.addEventListener('error', () => {
+    const failover = () => {
       // Safari rejects the chunked /stream pipe: fall back to the seekable
       // MP4 remux, then to a file/pipe transcode (per-browser), then give up.
       if (m.mode === 'stream' && m.kind === 'video' && !m.retry) {
@@ -370,7 +388,8 @@ async function showCurrent(forceKind){
         m.retry = 'tc'; showCurrent(TC_KIND); return;
       }
       stage.innerHTML = '<div class="status" style="color:#f77">playback failed \u2014 unsupported format or transcode pool busy</div>';
-    });
+    };
+    el.addEventListener('error', failover);
   }
   modal.querySelector('.links').innerHTML =
     '<a href="' + url + '" download="' + esc(m.name) + '">download</a>';

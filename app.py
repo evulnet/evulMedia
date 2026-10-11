@@ -579,7 +579,11 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
         else:
             cmd += qsv_video_args() if qsv_available() else x264_video_args()
         if has_audio:
-            cmd += ["-c:a", "copy"] if acodec in ("aac", "mp3") else ["-c:a", "aac", "-b:a", "192k"]
+            # AC-3/E-AC-3 copy through: Safari decodes them natively and the
+            # mp4 muxer accepts ac-3/ec-3; /stream keeps the conservative
+            # rule for Chrome-class. (AAC fallback for everything else.)
+            cmd += ["-c:a", "copy"] if acodec in ("aac", "mp3", "ac3", "eac3") \
+                else ["-c:a", "aac", "-b:a", "192k"]
         cmd += ["-f", "mp4", "-movflags", "+faststart", "-y", str(dest) + ".part"]
 
         try:
@@ -683,6 +687,18 @@ def _remux_gc(remux_dir, max_gb, max_age_days=0):
             total -= size
         except OSError:
             pass
+
+    # Orphaned .part files from builds killed mid-flight (restart/OOM):
+    # older than 6 h they can only be debris.
+    try:
+        for de in os.scandir(remux_dir):
+            if de.name.endswith(".part") and now - de.stat().st_mtime > 21600:
+                try:
+                    os.unlink(de.path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
     # Drop lock files whose media file is gone (orphans from GC'd entries).
     try:
@@ -1077,41 +1093,80 @@ def create_app():
             headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
         )
 
+    # Builds run detached: browsers must never hold an HTTP connection open
+    # across a minutes-long remux/transcode (Safari aborts the video request
+    # long before the build finishes). /remux answers 409 + JSON while a
+    # build is in flight; clients poll ?status=1 until state == "ready".
+    remux_jobs = {}            # rel -> {"state": building|error, "err": str}
+    remux_jobs_lock = threading.Lock()
+
+    def _remux_job(rel, target, force):
+        slot = None
+        err = None
+        try:
+            probed = probe(["ffprobe", "-v", "error"], target)
+            if force or plan_from_probe(probed) == "transcode":
+                slot = pool.acquire(wait_seconds=600)   # queue politely
+                if slot is None:
+                    raise RuntimeError("transcode pool busy")
+            ensure_remux(root, remux_dir, remux_max_gb, remux_max_age_days,
+                         target, rel, force_transcode=force)
+        except subprocess.CalledProcessError as exc:
+            err = (exc.stderr or b"")[-300:].decode("utf-8", "replace")
+        except Exception as exc:                        # noqa: BLE001
+            err = str(exc)[:300]
+        finally:
+            if slot is not None:
+                pool.release(slot)
+        with remux_jobs_lock:
+            if err:
+                remux_jobs[rel] = {"state": "error", "err": err}
+                _log.warning("remux build failed for %s: %s", rel, err)
+            else:
+                remux_jobs.pop(rel, None)
+
     @app.get("/remux")
     def remux():
         """Seekable, length-known MP4 (stream copy where possible). This is
-        what Safari needs; served with full Range support via send_file.
-        Non-copyable codecs mean a full video transcode, so those build
-        inside the global transcode pool (same cap as /stream, 503 when
-        saturated)."""
+        what Safari needs; served with full Range support via send_file once
+        built. Builds are detached: 409 while in flight, poll ?status=1."""
         rel = request.args.get("path", "")
         target = safe_resolve(root, rel)
         if not target.is_file() or classify(target.suffix) != "video":
             abort(404)
         force = request.args.get("transcode") == "1"
         cached, _ = remux_cache_path(root, remux_dir, target, rel, force)
-        if cached.is_file():          # built already: no probe, no slot
+        if cached.is_file():                            # no probe, no slot
             os.utime(cached, None)
+            if request.args.get("status") == "1":
+                return jsonify({"state": "ready"})
             return send_file(cached, mimetype="video/mp4", conditional=True,
                              max_age=86400 * 7)
-        slot = None
-        probed = probe(["ffprobe", "-v", "error"], target)
-        if force or plan_from_probe(probed) == "transcode":
-            slot = pool.acquire()
-            if slot is None:
-                return Response("transcode pool busy\n", status=503,
-                                headers={"Retry-After": "10"})
-        try:
-            dest = ensure_remux(root, remux_dir, remux_max_gb, remux_max_age_days,
-                                target, rel, force_transcode=force)
-        except subprocess.CalledProcessError:
+
+        spawn = False
+        status = request.args.get("status") == "1"
+        with remux_jobs_lock:
+            job = remux_jobs.get(rel)
+            # Only a plain GET (user action) may respawn an errored job;
+            # status polls must observe, never revive, or a broken file
+            # becomes an endless respawn loop and "error" is unobservable.
+            if job is None or (job["state"] == "error" and not status):
+                job = {"state": "building", "err": None}
+                remux_jobs[rel] = job
+                spawn = True
+        if job["state"] == "error":
+            if status:
+                return jsonify({"state": "error", "err": job.get("err")})
             return Response("remux build failed (server log has details)\n",
-                            status=500)
-        finally:
-            if slot is not None:
-                pool.release(slot)
-        return send_file(dest, mimetype="video/mp4", conditional=True,
-                         max_age=86400 * 7)
+                            status=500, headers={"Retry-After": "30"})
+        if spawn:
+            threading.Thread(target=_remux_job, args=(rel, target, force),
+                             daemon=True).start()
+        if status:
+            return jsonify({"state": "building"})
+        return Response('{"state":"building"}\n', status=409,
+                        mimetype="application/json",
+                        headers={"Retry-After": "5"})
 
     # ---- subtitles (opt-in via MB_SUBS=1; converted to WebVTT, cached) ----
     subs_dir = remux_dir / "subs"
