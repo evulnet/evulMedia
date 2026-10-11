@@ -48,6 +48,9 @@ import shutil
 import tempfile
 import threading
 import time
+from logging import getLogger
+
+_log = getLogger("evulmedia")
 import urllib.parse
 import zipfile
 from pathlib import Path
@@ -539,6 +542,14 @@ def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
             os.replace(str(dest) + ".part", dest)
+        except subprocess.CalledProcessError as exc:
+            _log.warning("remux build failed for %s: %s", rel,
+                         (exc.stderr or b"")[-600:].decode("utf-8", "replace"))
+            try:
+                os.unlink(str(dest) + ".part")
+            except OSError:
+                pass
+            raise
         except Exception:
             try:
                 os.unlink(str(dest) + ".part")
@@ -1042,8 +1053,9 @@ def create_app():
         try:
             dest = ensure_remux(root, remux_dir, remux_max_gb, remux_max_age_days,
                                 target, rel, force_transcode=force)
-        except subprocess.CalledProcessError as exc:
-            return Response(f"remux failed: {exc}\n", status=500)
+        except subprocess.CalledProcessError:
+            return Response("remux build failed (server log has details)\n",
+                            status=500)
         finally:
             if slot is not None:
                 pool.release(slot)
