@@ -71,6 +71,8 @@ Every box above is browsable, streamable and shareable via URL.
 
 - Linux (any recent), Python **3.11+**
 - `ffmpeg` + `ffprobe` on PATH (video thumbnails, /stream, /remux)
+- *Optional:* Intel iGPU (`/dev/dri/renderD*`) — transcodes then use Quick
+  Sync automatically (`h264_qsv`); no config, graceful x264 fallback.
 - [Caddy](https://caddyserver.com) **v2.6+** as the front (TLS + auth +
   the fast `/files` path). nginx is *not* supported — the /files
   fast-path relies on Caddy's `forward_auth` + `file_server`.

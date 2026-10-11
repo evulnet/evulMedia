@@ -50,7 +50,7 @@ venv/bin/python selftest.py                       # must exit 0; 35 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
-venv/bin/python tests/ui_stream_test.py           # 26 checks; prints SKIP (exit 0) without deps
+venv/bin/python tests/ui_stream_test.py           # 31 checks; prints SKIP (exit 0) without deps
 
 # 3) Lint: no configured linter; keep `python3 -m py_compile app.py selftest.py` clean
 ```
@@ -120,6 +120,21 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   intentionally transcode-only: Safari "decodes" AVI-era bitstreams with
   visible corruption (B-frames/GMC), so do not add mpeg4 to
   COPY_VIDEO_CODECS.
+- **Encoder selection (transcodes):** `qsv_available()` lazily probes one
+  real `h264_qsv` encode session once per process; when it succeeds (iGPU
+  + accessible `/dev/dri` render node, granted via
+  `SupplementaryGroups=video`) ALL video re-encodes — remux-file builds,
+  forced transcodes, and the live pipe — use QSV
+  (`qsv_video_args()`); otherwise every path falls back to
+  `x264_video_args()` (`libx264 -preset superfast`). Never inline encoder
+  args elsewhere than those two helpers.
+- **`/remux` cache-hit contract:** the route checks `remux_cache_path()`
+  and serves BEFORE probing or acquiring a pool slot, so cache hits stay
+  ~0 ms even when the pool is saturated; builds needing a re-encode take
+  a slot and answer 503 + `Retry-After: 10` when saturation persists
+  (mirrors `/stream`). Failed builds log the last 600 B of ffmpeg stderr
+  to the service log and return a bare 500 — command lines (which contain
+  library paths) must never reach HTTP bodies.
 - **Caches are content-addressed and disposable:** thumbnails keyed
   `sha1(relpath|size|mtime)`, remuxes `sha1(fmt|root|rel|size|mtime_ns|transcode?)`
   (bump `REMUX_FMT` to invalidate all; the `transcode?` flag was added with
@@ -214,12 +229,3 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   `change-me`, `/srv/media`).
 - New dependencies and new network egress from the app require an explicit
   OK from the maintainer.
-
-- Transcode encoders: h264_qsv is preferred whenever a lazy probe session succeeds
-  (iGPU + `/dev/dri` access via `SupplementaryGroups=video`); fallback is
-  `libx264 -preset superfast`. Never hardcode the encoder list elsewhere than
-  `qsv_video_args()`/`x264_video_args()`.
-
-- `/remux` transcode builds run under the transcode pool; a cache hit
-  short-circuits BEFORE the probe/slot acquisition, and pool saturation
-  answers 503 with `Retry-After: 10` (mirroring `/stream`).

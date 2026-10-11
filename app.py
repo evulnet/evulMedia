@@ -250,7 +250,6 @@ def qsv_available():
     global _qsv_cache
     if _qsv_cache is None:
         _qsv_cache = False
-        import tempfile as _tf
         fd, probe_out = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
         try:
