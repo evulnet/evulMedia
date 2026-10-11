@@ -12,7 +12,7 @@ import urllib.parse
 
 os.environ.setdefault("MB_REMUX_DIR", "/tmp/mb-selftest-remux")
 
-from app import Signer, plan_from_probe, create_app  # noqa: E402
+from app import Signer, plan_from_probe, build_stream_cmd, create_app  # noqa: E402
 
 FAILS = []
 
@@ -67,8 +67,14 @@ def main():
         r = c.get("/api/sign?path=" + urllib.parse.quote(rel))
         s = json.loads(r.data)
         check("sign video -> stream mode", s.get("mode") in ("stream", "direct"), s.get("mode"))
+        check("sign stream carries dur field", "dur" in s and s["dur"] >= 0)
         r = c.get("/api/sign?path=" + urllib.parse.quote(rel) + "&mode=mp4")
         check("sign video mode=mp4 -> /remux", "/remux" in json.loads(r.data).get("url", ""))
+        # /stream start-param validation (400 before any ffmpeg work)
+        check("stream rejects non-numeric start",
+              c.get("/stream?path=" + urllib.parse.quote(rel) + "&start=abc").status_code == 400)
+        check("stream rejects negative start",
+              c.get("/stream?path=" + urllib.parse.quote(rel) + "&start=-5").status_code == 400)
 
     # --- authz (forward_auth contract, with prefix stripped like handle_path) ---
     if secret:
@@ -97,6 +103,17 @@ def main():
     check("plan forced transcode", plan_from_probe([V("h264"), A("aac")], True) == "transcode")
     check("plan audio-only flac tc", plan_from_probe([A("flac")]) == "transcode-audio")
     check("plan audio-only opus copy", plan_from_probe([A("opus")]) == "copy")
+
+    # --- stream command construction (no ffmpeg needed) ---
+    cmd0 = build_stream_cmd("copy", "in.mkv", True, True)
+    check("stream: no -ss without start", "-ss" not in cmd0)
+    check("stream: -i present", cmd0.index("-i") == cmd0.index("in.mkv") - 1)
+    cmd1 = build_stream_cmd("copy", "in.mkv", True, True, start=61.5)
+    check("stream: -ss 61.500 before -i",
+          cmd1[cmd1.index("-ss") + 1] == "61.500" and cmd1.index("-ss") < cmd1.index("-i"))
+    cmd2 = build_stream_cmd("transcode", "in.mkv", True, True, start=3600)
+    check("stream: start works in transcode mode too",
+          cmd2.index("-ss") < cmd2.index("-i") and "libx264" in cmd2)
 
     print(f"\n{len(FAILS)} failure(s)")
     sys.exit(1 if FAILS else 0)

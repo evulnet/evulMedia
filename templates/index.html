@@ -70,8 +70,16 @@ h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
   display:none; align-items:center; justify-content:center; flex-direction:column; }
 #modal.open { display:flex; }
 #modal .stage { max-width:92vw; max-height:82vh; display:flex;
-  align-items:center; justify-content:center; }
+  align-items:center; justify-content:center; position:relative; }
 #modal video { max-width:92vw; max-height:82vh; outline:none; background:#000; border-radius:8px; }
+.resumeov { position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; background:rgba(0,0,0,.4); border-radius:8px;
+  cursor:pointer; color:#fff; font-size:3rem; line-height:1; }
+.resumeov:hover { color:var(--acc); }
+.seekctl { display:flex; align-items:center; gap:.5rem; font-size:.8rem; }
+.seekctl input[type=range]{ width:200px; accent-color:var(--acc); }
+.seekctl .t { font-variant-numeric:tabular-nums; white-space:nowrap; }
+#seekableLbl { font-size:.8rem; cursor:pointer; white-space:nowrap; }
 #modal img { max-width:92vw; max-height:82vh; border-radius:8px; }
 #modal .bar { color:#cfd6de; padding:.8rem 1rem .2rem; max-width:92vw;
   display:flex; gap:1rem; align-items:center; }
@@ -124,6 +132,10 @@ function fmtSize(b){
   return (b<10 && i>0 ? b.toFixed(1) : Math.round(b)) + ' ' + u[i];
 }
 function fmtDate(t){ return new Date(t*1000).toLocaleDateString(); }
+function fmtT(t){ t=Math.max(0,Math.floor(t));
+  const h=Math.floor(t/3600), m=Math.floor(t%3600/60), s=t%60;
+  return (h ? h+':'+String(m).padStart(2,'0') : m) + ':' + String(s).padStart(2,'0'); }
+const seekPref = () => localStorage.getItem('mbSeekable') === '1';
 function q(p){ return '?path=' + encodeURIComponent(p); }
 function join(dir, name){ return dir ? dir + '/' + name : name; }
 
@@ -238,6 +250,11 @@ function openModal(path, push=true){
 async function showCurrent(forceKind){
   const m = mediaSeq[seqIdx];
   if (!m) return;
+  // "seekable" preference: videos default to the remuxed faststart MP4
+  // (fully seekable via Range) instead of the live /stream pipe.
+  if (!forceKind && !m.url && m.kind === 'video' && seekPref())
+    forceKind = 'mp4';
+  modal.querySelector('.bar').querySelectorAll('.seekctl').forEach(n => n.remove());
   modal.querySelector('.title').textContent = m.name;
   if (forceKind === 'mp4' && m.mode !== 'mp4')
     stage.innerHTML = '<div class="status" style="color:#9cf">preparing MP4 remux (~10-30s)…</div>';
@@ -247,7 +264,7 @@ async function showCurrent(forceKind){
     const r = await fetch('/api/sign?path=' + encodeURIComponent(m.path) + want);
     if (r.ok) {
       const s = await r.json();
-      m.url = s.url; m.mode = s.mode;
+      m.url = s.url; m.mode = s.mode; m.dur = s.dur || 0; m.offset = 0;
       if (forceKind === true && m.mode === 'stream')
         m.url += (m.url.indexOf('?') >= 0 ? '&' : '?') + 'transcode=1';
     }
@@ -262,6 +279,7 @@ async function showCurrent(forceKind){
     : '<img src="' + url + '" alt="">';
   if (m.kind === 'video' || m.kind === 'audio') {
     const el = stage.querySelector('video, audio');
+    if (m.kind === 'video' && m.mode === 'stream') { m.base = url; m.offset = 0; attachStreamControls(el, m); }
     el.addEventListener('error', () => {
       // e.g. Safari rejects the chunked /stream pipe: fall back to the
       // seekable MP4 remux (video only), then a forced transcode, then give up.
@@ -282,11 +300,20 @@ async function showCurrent(forceKind){
     links += ' &middot; <a href="#" id="mp4">play as MP4</a>';
   if (m.kind === 'video' && m.mode !== 'stream')
     links += ' &middot; <a href="#" id="tc">transcode playback</a>';
+  if (m.kind === 'video')
+    links += ' &middot; <label id="seekableLbl"><input type="checkbox" id="seekable"'
+          + (seekPref() ? ' checked' : '') + '> seekable</label>';
   modal.querySelector('.links').innerHTML = links;
   const mp4 = document.getElementById('mp4');
   if (mp4) mp4.addEventListener('click', e => { e.preventDefault(); m.retry = 'mp4'; showCurrent('mp4'); });
   const tc = document.getElementById('tc');
   if (tc) tc.addEventListener('click', e => { e.preventDefault(); m.retry = 'tc'; showCurrent(true); });
+  const seekChk = document.getElementById('seekable');
+  if (seekChk) seekChk.addEventListener('change', e => {
+    localStorage.setItem('mbSeekable', e.target.checked ? '1' : '0');
+    m.url = null; m.retry = undefined;
+    showCurrent(e.target.checked ? 'mp4' : false);
+  });
   if (modal.classList.contains('open'))
     history.replaceState({media:m.path}, '', mediaUrl(m.path));
 }
@@ -294,6 +321,62 @@ function step(d){
   if (!mediaSeq.length) return;
   seqIdx = (seqIdx + d + mediaSeq.length) % mediaSeq.length;
   showCurrent();
+}
+// ---- live /stream pseudo-seek + pause/resume --------------------------
+// The /stream pipe has no index and dies after MB_STALL_TIMEOUT when
+// unconsumed (a pause stops consumption). So: seek = reconnect with
+// ?start=SECONDS (ffmpeg input-seeks, output timeline restarts at 0, we
+// track the content offset); pause = tear the connection down at once
+// (frees the transcode slot) and resume later at the remembered position.
+function attachStreamControls(el, m){
+  const bar = modal.querySelector('.bar');
+  let tearing = false, ended = false, userScrub = false;
+  const pos = () => (el.currentTime || 0) + (m.offset || 0);
+  const streamUrl = t => m.base + (m.base.indexOf('?') >= 0 ? '&' : '?')
+                          + 'start=' + Math.max(0, t).toFixed(1);
+  let rng = null, tspan = null;
+  if (m.dur > 0){
+    const ctl = document.createElement('span'); ctl.className = 'seekctl';
+    rng = document.createElement('input');
+    rng.type = 'range'; rng.min = 0; rng.max = Math.floor(m.dur); rng.step = 1;
+    rng.title = 'seek (reconnects the live stream)';
+    tspan = document.createElement('span'); tspan.className = 't';
+    tspan.textContent = '0:00 / ' + fmtT(m.dur);
+    ctl.appendChild(rng); ctl.appendChild(tspan); bar.appendChild(ctl);
+    rng.addEventListener('input', () => {
+      userScrub = true; tspan.textContent = fmtT(rng.valueAsNumber) + ' / ' + fmtT(m.dur);
+    });
+    rng.addEventListener('change', () => { userScrub = false; reconnect(rng.valueAsNumber); });
+  }
+  function reconnect(t){
+    m.offset = t;
+    el.src = streamUrl(t);
+    el.play().catch(() => {});
+  }
+  el.addEventListener('timeupdate', () => {
+    if (!rng || userScrub || tearing) return;
+    rng.value = pos();
+    tspan.textContent = fmtT(pos()) + ' / ' + fmtT(m.dur);
+  });
+  el.addEventListener('ended', () => { ended = true; });
+  el.addEventListener('pause', () => {
+    if (tearing || ended) return;
+    const at = pos();
+    tearing = true;
+    el.pause();
+    el.removeAttribute('src'); el.load();   // close the pipe, free the slot
+    tearing = false;
+    const ov = document.createElement('div');
+    ov.className = 'resumeov'; ov.textContent = '\u25b6';
+    ov.title = 'Resume from ' + fmtT(at);
+    ov.addEventListener('click', () => {
+      m.offset = at;
+      el.src = streamUrl(at);
+      el.play().catch(() => {});
+      ov.remove();
+    });
+    modal.querySelector('.stage').appendChild(ov);
+  });
 }
 document.getElementById('prev').addEventListener('click', e => { e.stopPropagation(); step(-1); });
 document.getElementById('next').addEventListener('click', e => { e.stopPropagation(); step(1); });
