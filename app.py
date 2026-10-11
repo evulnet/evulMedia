@@ -43,12 +43,18 @@ import os
 import re
 import signal
 import subprocess
+import shutil
 import tempfile
 import threading
 import time
 import urllib.parse
 import zipfile
 from pathlib import Path
+
+try:                              # optional RAR backend (needs an external tool)
+    import rarfile                # pip install rarfile
+except ImportError:               # noqa: C401
+    rarfile = None
 
 from PIL import Image, ImageOps
 from flask import (
@@ -85,6 +91,12 @@ VIDEO_EXTS = {
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav",
               ".flac", ".mka", ".wma"}
 ARCHIVE_EXTS = {".cbz", ".zip"}
+if rarfile and any(shutil.which(t) for t in ("unar", "lsar", "unrar", "bsdtar", "7z", "7za")):
+    ARCHIVE_EXTS |= {".rar", ".cbr"}     # RAR browsing enabled (external tool found)
+
+SIDECAR_SUB_EXTS = {".srt", ".vtt", ".ass", ".sub"}
+SUBS_ENABLED = os.environ.get("MB_SUBS") == "1"   # opt-in; ffmpeg-converted WebVTT
+SUB_TEXT_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt"}
 NATIVE_AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav"}
 DOC_EXTS = {".nfo", ".txt", ".srt", ".ass", ".sub", ".vtt", ".url", ".m3u"}
 
@@ -157,20 +169,30 @@ def split_archive(root, rel):
     return None, None, None
 
 
+def open_archive(path):
+    """Open a zip-family or RAR archive with a common (zipfile-like) API."""
+    if rarfile and Path(path).suffix.lower() in (".rar", ".cbr"):
+        return rarfile.RarFile(path)
+    return zipfile.ZipFile(path)
+
+
 def read_member(apath, member, max_size=512 * 1024 * 1024):
-    """Read one zip entry into memory with zip-bomb guard."""
+    """Read one archive entry into memory with a zip-bomb guard."""
     try:
-        with zipfile.ZipFile(apath) as zf:
+        with open_archive(apath) as zf:
             info = zf.getinfo(member)
-            if info.is_dir() or (info.flag_bits & 0x1):
+            if info.is_dir() or getattr(info, "flag_bits", 0) & 0x1 \
+                    or getattr(info, "needs_password", False):
                 abort(404)                      # dirs / encrypted entries
             if info.file_size > max_size:
                 abort(413)
             return zf.read(info), info
     except KeyError:
         abort(404)
-    except zipfile.BadZipFile:
+    except (zipfile.BadZipFile, OSError):
         abort(404)
+    except Exception:
+        abort(404)          # rarfile raises a zoo of tool-specific errors
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +418,68 @@ class TranscodePool:
 
 REMUX_FMT = "hvc1"   # bump to invalidate all remux caches after muxer fixes
 
+def probe_lang(source):
+    """ffprobe JSON of all streams (codec_type/name/tags); [] on any failure."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json",
+             "-show_streams", str(source)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return json.loads(result.stdout).get("streams", [])
+    except (subprocess.SubprocessError, ValueError):
+        return []
+
+
+def sidecar_subs(video_path):
+    """Subtitle files next to the video sharing its stem: movie.en.srt etc."""
+    out = []
+    stem = video_path.name
+    for ext in VIDEO_EXTS | {".m4v"}:
+        if stem.lower().endswith(ext):
+            stem = stem[:-len(ext)]
+            break
+    try:
+        for de in video_path.parent.iterdir():
+            if not de.is_file() or de.suffix.lower() not in SIDECAR_SUB_EXTS:
+                continue
+            if de.name.lower().startswith(stem.lower() + "."):
+                lang = de.stem[len(stem):].strip("._-") or ""
+                out.append((de.name, lang))
+    except OSError:
+        pass
+    return out
+
+
+def srt_to_vtt(data):
+    """Minimal in-memory SRT -> WebVTT (timestamp comma -> dot + header)."""
+    for enc in ("utf-8", "latin-1"):
+        try:
+            text = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    text = re.sub(r"(\d{2}:\d{2}:\d{2}),(\d{3})", r"\1.\2", text)
+    return ("WEBVTT\n\n" + text.lstrip("\ufeff")).encode("utf-8")
+
+
+def extract_vtt(source, stream_id, cache_path, timeout=120):
+    """Convert any subtitle source/stream to a cached WebVTT file via ffmpeg."""
+    dest = str(cache_path) + ".part"
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i",
+           str(source), "-map", stream_id, "-c:s", "webvtt",
+           "-f", "webvtt", "-y", dest]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=timeout)
+        os.replace(dest, cache_path)
+    except Exception:
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
+        abort(502)
+
+
 def ensure_remux(root, remux_dir, max_gb, max_age_days, target, rel,
                  force_transcode=False):
     """Remux (stream-copy when possible, or fully re-encode when
@@ -512,7 +596,7 @@ def _remux_gc(remux_dir, max_gb, max_age_days=0):
     files = []
     try:
         for de in os.scandir(remux_dir):
-            if de.name.endswith(".mp4") and de.is_file():
+            if de.name.endswith((".mp4", ".vtt")) and de.is_file():
                 st = de.stat()
                 files.append((st.st_atime, st.st_size, de.path))
     except OSError:
@@ -553,17 +637,17 @@ def _remux_gc(remux_dir, max_gb, max_age_days=0):
 
 
 def list_archive(target, rel):
-    """Virtual listing for .cbz/.zip galleries (image/audio/video/pdf files)."""
+    """Virtual listing for .cbz/.zip/.rar galleries (image/audio/video/pdf files)."""
     try:
-        zf = zipfile.ZipFile(target)
-    except (zipfile.BadZipFile, OSError):
+        zf = open_archive(target)
+    except Exception:
         abort(404)
 
     files = []
     with zf:
         for info in zf.infolist():
             name = info.filename
-            if name.endswith("/") or ".." in name.split("/"):
+            if name.endswith("/") or ".." in name.split("/") or info.is_dir():
                 continue
             base = name.rsplit("/", 1)[-1]
             if name.startswith("__MACOSX/") or base.startswith("."):
@@ -942,6 +1026,92 @@ def create_app():
             return Response(f"remux failed: {exc}\n", status=500)
         return send_file(dest, mimetype="video/mp4", conditional=True,
                          max_age=86400 * 7)
+
+    # ---- subtitles (opt-in via MB_SUBS=1; converted to WebVTT, cached) ----
+    subs_dir = remux_dir / "subs"
+
+    def _vtt_response(path):
+        os.utime(path, None)
+        return Response(path.read_bytes(),
+                        headers={"Content-Type": "text/vtt; charset=utf-8",
+                                 "Cache-Control": "private, max-age=86400"})
+
+    @app.get("/api/subs")
+    def api_subs():
+        """Advertise subtitles: embedded text streams + sidecar files."""
+        if not SUBS_ENABLED:
+            return jsonify({"subs": []})
+        rel = request.args.get("path", "")
+        target = safe_resolve(root, rel)
+        if not target.is_file() or classify(target.suffix) not in ("video", "audio"):
+            abort(404)
+        out, n = [], 0
+        for s in probe_lang(target):
+            if s.get("codec_type") != "subtitle":
+                continue
+            codec = s.get("codec_name", "")
+            idx = n
+            n += 1
+            if codec not in SUB_TEXT_CODECS:      # PGSS/DVD bitmaps not convertible
+                continue
+            tags = s.get("tags") or {}
+            lang = (tags.get("language") or "").strip()
+            title = (tags.get("title") or "").strip()
+            out.append({"key": f"e:{idx}", "lang": lang,
+                        "label": title or lang or f"subtitle {idx + 1}"})
+        for name, lang in sidecar_subs(target):
+            out.append({"key": "f:" + name, "lang": lang,
+                        "label": Path(name).stem.split(".")[-1] if lang else name})
+        return jsonify({"subs": out})
+
+    @app.get("/subs")
+    def subs():
+        """Serve one subtitle track as WebVTT (converted + cached on demand)."""
+        if not SUBS_ENABLED:
+            abort(404)
+        rel = request.args.get("path", "")
+        key = request.args.get("key", "")
+        target = safe_resolve(root, rel)
+        if not target.is_file():
+            abort(404)
+        st = target.stat()
+        if key.startswith("e:"):
+            idx = key[2:]
+            if not idx.isdigit():
+                abort(400)
+            h = hashlib.sha1(b"%s\0%s\0%d\0%d\0e%s" % (str(root).encode(),
+                     rel.encode("utf-8", "surrogateescape"), st.st_size,
+                     st.st_mtime_ns, idx.encode())).hexdigest()
+            dest = subs_dir / (h + ".vtt")
+            if not dest.is_file():
+                subs_dir.mkdir(parents=True, exist_ok=True)
+                extract_vtt(target, f"0:s:{idx}", dest)
+                _remux_gc(subs_dir, 1, remux_max_age_days)
+            return _vtt_response(dest)
+        if key.startswith("f:"):
+            name = key[2:]
+            allowed = dict(sidecar_subs(target))
+            if name not in allowed:
+                abort(404)
+            side = safe_resolve(root, str(Path(rel).parent / name))
+            if side.suffix.lower() == ".vtt":
+                return Response(side.read_bytes(),
+                                headers={"Content-Type": "text/vtt; charset=utf-8",
+                                         "Cache-Control": "private, max-age=86400"})
+            if side.suffix.lower() == ".srt":
+                return Response(srt_to_vtt(side.read_bytes()),
+                                headers={"Content-Type": "text/vtt; charset=utf-8",
+                                         "Cache-Control": "private, max-age=86400"})
+            h = hashlib.sha1(b"%s\0%s\0%d\0%d\0f%s" % (str(root).encode(),
+                     rel.encode("utf-8", "surrogateescape"), st.st_size,
+                     st.st_mtime_ns, name.encode())).hexdigest()
+            dest = subs_dir / (h + ".vtt")
+            if not dest.is_file():
+                subs_dir.mkdir(parents=True, exist_ok=True)
+                extract_vtt(side, "0:s:0", dest)
+                _remux_gc(subs_dir, 1, remux_max_age_days)
+            return _vtt_response(dest)
+        abort(400)
 
     @app.get("/dl")
     def download():

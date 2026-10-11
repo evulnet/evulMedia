@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-test for the media browser. Run against the SAME env the service uses:
 
-    cd /opt/evulmedia && sudo -u www-data env $(grep -v '^#' env/media.env | xargs) venv/bin/python selftest.py
+    cd /opt/media-browser && sudo -u www-data env $(grep -v '^#' env/media.env | xargs) venv/bin/python selftest.py
 
 Exits non-zero on any failure. Safe: read-only except a scratch remux dir.
 """
@@ -11,6 +11,7 @@ import sys
 import urllib.parse
 
 os.environ.setdefault("MB_REMUX_DIR", "/tmp/mb-selftest-remux")
+os.environ.setdefault("MB_SUBS", "0")
 
 from app import Signer, plan_from_probe, build_stream_cmd, create_app  # noqa: E402
 
@@ -72,6 +73,8 @@ def main():
         check("sign video mode=mp4 -> /remux", "/remux" in json.loads(r.data).get("url", ""))
         check("remux 404 on non-media", c.get("/remux?path=nope.txt").status_code == 404)
         check("remux 404 on missing file", c.get("/remux?path=zzz.mkv").status_code == 404)
+        check("subs disabled by default", c.get("/api/subs?path=x.mp4").json == {"subs": []})
+        check("subs endpoint 404 when disabled", c.get("/subs?path=x.mp4&key=e:0").status_code == 404)
         # /stream start-param validation (400 before any ffmpeg work)
         check("stream rejects non-numeric start",
               c.get("/stream?path=" + urllib.parse.quote(rel) + "&start=abc").status_code == 400)
