@@ -334,6 +334,30 @@ def run_ui(sync_playwright, slots_dir):
         check("UI: setting off disables folder memory", at_root)
         page.click("#cogBtn")
         check("UI: folder-memory toggle kept off", page.evaluate("() => dirChk.checked") is False)
+
+        # --- autoplay OFF: no play() at all, tap-to-play button appears ---
+        page.goto(f"{BASE}/")
+        page.wait_for_selector("#cogBtn")
+        page.click("#cogBtn")
+        page.uncheck("#autoplayChk")
+        page.keyboard.press("Escape")
+        page.evaluate("""() => { window.__plays = 0;
+            const op = HTMLMediaElement.prototype.play;
+            HTMLMediaElement.prototype.play = function () { window.__plays++; return op.apply(this, arguments); }; }""")
+        page.click('[data-file="test_clip.mkv"]')
+        page.wait_for_function(
+            "() => { const v = document.querySelector('video');"
+            " return v && v.readyState >= 1; }", timeout=60000)
+        page.wait_for_timeout(1500)
+        check("UI: autoplay-off never calls play()",
+              page.evaluate("() => window.__plays") == 0)
+        page.wait_for_selector(".ppbtn", timeout=5000)
+        vis = page.evaluate("() => getComputedStyle(document.querySelector('.ppbtn')).display")
+        check("UI: autoplay-off reveals tap-to-play button", vis == "flex", vis)
+        page.click(".ppbtn")
+        page.wait_for_function(
+            "() => document.querySelector('video').currentTime > 0", timeout=15000)
+        check("UI: tap-to-play button starts playback", True)
         fcntl.flock(lk, fcntl.LOCK_EX)          # cache hit must not need the pool
         try:
             t0 = time.time()
