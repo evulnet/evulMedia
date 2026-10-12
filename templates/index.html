@@ -342,7 +342,8 @@ async function showCurrent(forceKind){
   m.resume = 0;
   if (m.kind === 'video' && watchOn() && resumeOn()) {
     const rec = watchStore()[m.path];
-    if (rec && rec.s === 'p' && rec.t > 20 && (!rec.d || rec.t < rec.d - 20))
+    const edge = rec && rec.d ? Math.min(20, rec.d * 0.1) : 20;   // short clips too
+    if (rec && rec.s === 'p' && rec.t > edge && (!rec.d || rec.t < rec.d - edge))
       m.resume = rec.t;
   }
   if (forceKind || !m.url) {
@@ -355,15 +356,20 @@ async function showCurrent(forceKind){
       m.transcode = !!s.transcode;
       if ((forceKind === true && m.mode === 'stream') || forceKind === 'mp4tc')
         m.url += (m.url.indexOf('?') >= 0 ? '&' : '?') + 'transcode=1';
-      if (m.resume && m.mode === 'stream')
-        m.url += (m.url.indexOf('?') >= 0 ? '&' : '?') + 'start=' + m.resume;
+      // NOTE: no &start= here — m.url/m.base must stay clean; the stream
+      // resume/seek URL is composed fresh in streamUrl() (duplicate start
+      // params would make the server take the FIRST value and ignore the seek).
     }
   }
   const url = m.url || '/view' + q(m.path);
   const ap = autoplayOn() ? ' autoplay' : '';
   const isBuild = m.kind === 'video' && m.mode === 'mp4';   // async /remux
+  // stream+resume omits src too: attachStreamControls composes the
+  // start= URL from a CLEAN m.base (duplicate start params would make
+  // the server use the first value and ignore the seek)
+  const noSrc = isBuild || (m.kind === 'video' && m.mode === 'stream' && m.resume);
   stage.innerHTML = m.kind === 'video'
-    ? '<video playsinline' + (isBuild ? '' : ' src="' + url + '"') + ' controls' + ap + '></video>'
+    ? '<video playsinline' + (noSrc ? '' : ' src="' + url + '"') + ' controls' + ap + '></video>'
     : m.kind === 'audio'
     ? '<audio src="' + url + '" controls' + ap + '></audio>'
     : m.kind === 'pdf'
@@ -469,6 +475,7 @@ function attachStreamControls(el, m){
   const pos = () => (el.currentTime || 0) + (m.offset || 0);
   const streamUrl = t => m.base + (m.base.indexOf('?') >= 0 ? '&' : '?')
                           + 'start=' + Math.max(0, t).toFixed(1);
+  if (m.resume) el.src = streamUrl(m.resume);   // resume-open via clean base
   let rng = null, tspan = null;
   if (m.dur > 0){
     const ctl = document.createElement('span'); ctl.className = 'seekctl';
@@ -603,9 +610,14 @@ function vts(s){
 // 'ended'). Keys are virtual paths, so files INSIDE .zip/.cbz/.rar get
 // their own pips. Everything is per-browser by design: no server state.
 const WATCH_CAP = 400;
+let _wCache = null, _wCacheAt = 0;   // memoized: cardHTML asks once per card
 function watchStore(){
-  try { return JSON.parse(localStorage.getItem('mbWatch')) || {}; }
-  catch (e) { return {}; }
+  const now = Date.now();
+  if (_wCache && now - _wCacheAt < 2000) return _wCache;
+  try { _wCache = JSON.parse(localStorage.getItem('mbWatch')) || {}; }
+  catch (e) { _wCache = {}; }
+  _wCacheAt = now;
+  return _wCache;
 }
 function watchSet(path, state, t, dur){
   if (!watchOn()) return;
@@ -617,6 +629,7 @@ function watchSet(path, state, t, dur){
     ks.sort((a, b) => w[a].ts - w[b].ts).slice(0, ks.length - WATCH_CAP)
       .forEach(k => delete w[k]);
   localStorage.setItem('mbWatch', JSON.stringify(w));
+  _wCache = w; _wCacheAt = Date.now();
   updatePip(path);
 }
 function watchPip(path){
@@ -754,10 +767,13 @@ const startBrowse = locPath(/^\/browse\/(.*)$/);
 if (startMedia) openFromUrl(startMedia.replace(/\/+$/,''));
 else {
   let boot = startBrowse === null ? '' : startBrowse.replace(/\/+$/,'');
-  // "remember last folder": a bare root visit returns you where you left off
-  if (startBrowse === null && rememberOn())
-    boot = localStorage.getItem('mbLastFolder') || '';
-  go(boot, false);
+  // "remember last folder": a bare root visit returns you where you left
+  // off — but only if that folder still exists (deleted dirs fall back home)
+  if (startBrowse === null && rememberOn() && localStorage.getItem('mbLastFolder')) {
+    const mem = localStorage.getItem('mbLastFolder');
+    fetch('/api/ls' + q(mem)).then(r => (r.ok ? mem : '')).catch(() => '')
+      .then(p => go(p, false));
+  } else go(boot, false);
 }
 </script>
 </body>
