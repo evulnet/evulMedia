@@ -124,6 +124,14 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   aware through `attachStreamControls`). Toggles `mbWatchOn`/`mbResume`/
   `mbLastDirOn` are default-on (`!== '0'`). Root-URL folder recall only
   fires on a bare `/` visit, never on `/browse/...` or `/media/...` links.
+- **Autoplay is best-effort, tap-to-play is the contract:** the
+  sign→(poll)→src chain burns the user gesture, so every mount sets
+  `playsinline`, and when `autoplayOn()` the player attempts `el.play()`
+  and reveals a big centered ▶ (`.ppbtn`) on rejection or on
+  loadedmetadata-while-paused; the button self-removes on first `playing`.
+  With autoplay OFF, no `play()` may ever be called (regression-tested via
+  call spy) — the button is then the only start path. Keep this invariant
+  when touching `showCurrent`.
 - **Client preferences** live in `localStorage` only (never the server):
   `mbPbMode` (video playback: auto|seekable|transcode), `mbTheme`,
   `mbAutoplay`, `mbShowSize`, plus legacy `mbSeekable` (migrated as a
