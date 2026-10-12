@@ -53,6 +53,15 @@ Every box above is browsable, streamable and shareable via URL.
   painted by a built-in CC button in the player bar (cycles: off → track 1
   → track 2 → …). Self-rendered on purpose: Safari never lists dynamically
   inserted `<track>` elements in its caption menu. No video re-encode ever.
+- **Watch list & resume** (localStorage only — the server keeps no state):
+  a pip on each card shows watch status — an amber ring = partially
+  watched video (with resume position), a solid green dot = watched/finished.
+  Videos offer mid-file resume wherever the playback path supports seeking
+  (and via input-seek reconnect on the live pipe); audio, images, PDFs and
+  individual files **inside .zip/.cbz/.rar** get a plain viewed pip. All
+  three behaviors are toggles in the ⚙ settings tab, default on.
+- **Remembers where you were:** visiting the bare root URL returns to your
+  last browsed folder (archives included); toggle in settings, default on.
 - **Audio** plays inline (album/audiobook stepping with arrow keys).
 - **PDFs** open in a near-fullscreen native viewer.
 - **Filenames-only cache**: a directory walk never blocks a request;
@@ -127,7 +136,8 @@ the remembered position. The **⚙ settings** tab (header) lets you pick a
 permanent video-playback mode — *auto*, *seekable MP4* (play from the
 `/remux` faststart file, fully seekable via native controls, one-time
 remux per file), or *force transcode* — plus theme, autoplay, whether
-file sizes show, and a fullscreen lightbox (⛶ / `F`, double-click an
+file sizes show, watch-list pips / video resume / last-folder memory (all
+default on), and a fullscreen lightbox (⛶ / `F`, double-click an
 image). Safari gets its forced transcode as a file (`/remux?transcode=1`),
 never the live pipe. All preferences persist in `localStorage`.
 
@@ -226,6 +236,10 @@ venv/bin/python tests/ui_stream_test.py   # skips cleanly without ffmpeg/Chromiu
 - Subtitles are text-only (bitmap PGS/DVD subtitles are listed nowhere and
   not converted); ASS styling is flattened to basic WebVTT.
 - No upload/delete/edit — deliberately read-only.
+- Watch pips, resume positions and the remembered folder live in browser
+  `localStorage`: per browser and device, gone if you clear site data, and
+  keyed by path — renaming/moving a media file starts it fresh (archive
+  members are keyed by `archive/member` path).
 - No multi-user watch state, no metadata enrichment, no subtitle burn-in
   (subs ride as separate WebVTT tracks; the video is never re-encoded for
   them, and `/stream` still strips embedded tracks from the pipe).
