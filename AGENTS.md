@@ -18,9 +18,12 @@ Emby/Jellyfin. Keep that spirit in every change: fewer moving parts, not more.
 ```
 app.py                  the entire server (single file, ~1050 lines; see section below)
 wsgi.py                 gunicorn entrypoint (calls create_app())
-selftest.py             35-check smoke suite; read-only, safe to run on prod
+selftest.py             38-check smoke suite; read-only, safe to run on prod
 templates/index.html    whole frontend: one HTML file, inline CSS/JS, no build step,
                         no frameworks, no CDN
+static/                 favicon set (favicon.svg for modern browsers, favicon.png
+                        48 fallback, apple-touch-icon.png 180 opaque for iOS);
+                        regenerate with scripts/make_icons.py
 tests/ui_stream_test.py Playwright (Chromium) UI test for stream seek/pause/seekable;
                         dev-only, self-contained, skips without ffmpeg/Chromium
 env/*.env.example       per-instance config seeds (real *.env files are gitignored)
@@ -46,7 +49,7 @@ empty in dev; production requires it.
 
 ```bash
 # 1) Smoke/logic suite — run against real env on deploys:
-venv/bin/python selftest.py                       # must exit 0; 35 checks
+venv/bin/python selftest.py                       # must exit 0; 38 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
@@ -102,6 +105,13 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   `.rar/.cbr` degrade to plain files otherwise. `ARCHIVE_EXTS` is decided
   once at import time. `rarfile` is the one non-core dependency, import-
   guarded; removing it must keep the guarded-import contract.
+- **Favicons:** `static/` served by Flask's own static route (Caddy only
+  proxies it; no `/files` involvement). iOS/macOS home-screen icons must be
+  opaque square PNGs (`apple-touch-icon.png`, 180, no alpha, no rounded
+  corners — iOS masks it itself); the SVG serves modern tab favicons, the
+  48 px PNG is the fallback for browsers that won't render SVG favicons.
+  PNGs are generated, not designed by hand: rerun
+  `scripts/make_icons.py` after palette changes.
 - **Client preferences** live in `localStorage` only (never the server):
   `mbPbMode` (video playback: auto|seekable|transcode), `mbTheme`,
   `mbAutoplay`, `mbShowSize`, plus legacy `mbSeekable` (migrated as a
@@ -231,7 +241,7 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   **nkavassalis** is an org admin and pushes through it); verify with
   `gh auth status` before pushing (token lives in `gh`, never in the repo).
 - Work on feature branches; open PRs; PRs must have `selftest.py` green
-  (35/35) and, for any player/UI change, `tests/ui_stream_test.py` green
+  (38/38) and, for any player/UI change, `tests/ui_stream_test.py` green
   (or an explicit SKIP note plus manual verification described in the PR).
 - Never push with failing checks; never force-push master; never commit
   anything resembling a secret, hostname, private IP, path under a real
