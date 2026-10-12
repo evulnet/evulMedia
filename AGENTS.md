@@ -53,7 +53,7 @@ venv/bin/python selftest.py                       # must exit 0; 38 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
-venv/bin/python tests/ui_stream_test.py           # 35 checks; prints SKIP (exit 0) without deps
+venv/bin/python tests/ui_stream_test.py           # 42 checks; prints SKIP (exit 0) without deps
 
 # 3) Lint: no configured linter; keep `python3 -m py_compile app.py selftest.py` clean
 ```
@@ -112,6 +112,18 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   48 px PNG is the fallback for browsers that won't render SVG favicons.
   PNGs are generated, not designed by hand: rerun
   `scripts/make_icons.py` after palette changes.
+- **Watch list is 100% client-side** (`mbWatch` JSON in `localStorage`,
+  LRU-capped at 400 entries; `mbLastFolder` string for folder memory):
+  the server is stateless/read-only by design — NEVER move watch state
+  server-side. Semantics: video → partial ring pip (`{s:'p',t,d}` keeps
+  the resume position) until within `min(15s, 5%)` of the end or `ended`,
+  then solid; audio → solid at ≥90%; images/PDF → solid on open. Keys are
+  virtual paths, so archive members (`book.cbz/page-001.jpg`) get their
+  own pips. Resume: seekable modes set `currentTime` on `loadedmetadata`;
+  the live pipe resumes by appending `?start=` to the sign URL (offset-
+  aware through `attachStreamControls`). Toggles `mbWatchOn`/`mbResume`/
+  `mbLastDirOn` are default-on (`!== '0'`). Root-URL folder recall only
+  fires on a bare `/` visit, never on `/browse/...` or `/media/...` links.
 - **Client preferences** live in `localStorage` only (never the server):
   `mbPbMode` (video playback: auto|seekable|transcode), `mbTheme`,
   `mbAutoplay`, `mbShowSize`, plus legacy `mbSeekable` (migrated as a

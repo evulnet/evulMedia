@@ -50,8 +50,12 @@ h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
   overflow:hidden; cursor:pointer; text-decoration:none; color:var(--fg);
   display:flex; flex-direction:column; transition: border-color .12s, transform .12s; }
 .card:hover { border-color:var(--acc); transform: translateY(-2px); }
-.thumb { width:100%; aspect-ratio:16/10; background:var(--bg3);
+.thumb { width:100%; aspect-ratio:16/10; background:var(--bg3); position:relative;
   display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.pip { position:absolute; top:.45rem; right:.45rem; width:.7rem; height:.7rem;
+  border-radius:50%; box-shadow:0 0 3px rgba(0,0,0,.6); box-sizing:border-box; }
+.pip.d { background:#3fbf6f; }                     /* solid green = watched   */
+.pip.p { background:transparent; border:.22rem solid #f5a623; } /* ring = part */
 .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
 .icon { font-size:2.2rem; opacity:.85; }
 .label { padding:.4rem .55rem; font-size:.78rem; line-height:1.25;
@@ -153,6 +157,9 @@ body.no-size .label .meta { display:none; }
   <label class="chk"><input type="checkbox" id="autoplayChk"> autoplay</label>
   <label class="chk"><input type="checkbox" id="sizeChk"> show file sizes</label>
   <label class="chk"><input type="checkbox" id="subsChk"> subtitles (when available)</label>
+  <label class="chk"><input type="checkbox" id="watchChk"> watch list (pips)</label>
+  <label class="chk"><input type="checkbox" id="resumeChk"> resume videos</label>
+  <label class="chk"><input type="checkbox" id="dirChk"> remember last folder</label>
   <div class="hint">lightbox: ⛶ = fullscreen (or double-click an image)</div>
 </div>
 <nav id="crumbs"><button id="backBtn" title="up one level">← Back</button><span id="crumbLinks"></span></nav>
@@ -199,6 +206,9 @@ const pbMode = () => localStorage.getItem('mbPbMode')
   || (seekPref() ? 'seekable' : 'auto');   // migrated old preference key
 const autoplayOn = () => localStorage.getItem('mbAutoplay') !== '0';
 const subsOn = () => localStorage.getItem('mbSubs') === '1';   // opt-in per user
+const watchOn = () => localStorage.getItem('mbWatchOn') !== '0';    // default on
+const resumeOn = () => localStorage.getItem('mbResume') !== '0';    // default on
+const rememberOn = () => localStorage.getItem('mbLastDirOn') !== '0'; // default on
 function q(p){ return '?path=' + encodeURIComponent(p); }
 function join(dir, name){ return dir ? dir + '/' + name : name; }
 
@@ -232,6 +242,7 @@ function cardHTML(base, name, opts){
   else if (opts.thumbUrl) thumb = '<div class="thumb"><img loading="lazy" src="' + opts.thumbUrl + '" alt=""></div>';
   else if (opts.kind === 'audio') thumb = '<div class="thumb"><span class="icon">\u266a</span></div>';
   else thumb = '<div class="thumb"><span class="icon">\u2261</span></div>';
+  if (!isFolder) thumb = thumb.slice(0, -6) + watchPip(path) + '</div>';
   const href = isFolder ? 'data-dir="' + esc(path) + '"' : 'data-file="' + esc(path) + '" data-kind="' + opts.kind + '"';
   return '<a class="' + cls + '" ' + href + ' title="' + esc(name) + '">' +
     thumb + '<div class="label"><span>' + esc(name) + '</span>' + badge + meta + '</div></a>';
@@ -290,6 +301,7 @@ filterEl.addEventListener('input', applyFilter);
 
 async function go(path, push=true, force=false){
   history; // no-op
+  if (rememberOn()) localStorage.setItem('mbLastFolder', path);
   content.className = 'status'; content.textContent = 'loading…';
   if (push) history.pushState({path}, '', dirUrl(path));
   document.title = (path || ROOT_NAME) + ' — evulMedia';
@@ -323,6 +335,12 @@ async function showCurrent(forceKind){
     stage.innerHTML = '<div class="status" style="color:#9cf"><span class="spin"></span>' +
       (forceKind === 'mp4tc' ? 'preparing file transcode (30-90s)…'
                              : 'preparing MP4 remux (~10-30s)…') + '</div>';
+  m.resume = 0;
+  if (m.kind === 'video' && watchOn() && resumeOn()) {
+    const rec = watchStore()[m.path];
+    if (rec && rec.s === 'p' && rec.t > 20 && (!rec.d || rec.t < rec.d - 20))
+      m.resume = rec.t;
+  }
   if (forceKind || !m.url) {
     const want = (forceKind === 'mp4' || forceKind === 'mp4tc') ? '&mode=mp4'
                : forceKind ? '&mode=stream' : '';
@@ -333,6 +351,8 @@ async function showCurrent(forceKind){
       m.transcode = !!s.transcode;
       if ((forceKind === true && m.mode === 'stream') || forceKind === 'mp4tc')
         m.url += (m.url.indexOf('?') >= 0 ? '&' : '?') + 'transcode=1';
+      if (m.resume && m.mode === 'stream')
+        m.url += (m.url.indexOf('?') >= 0 ? '&' : '?') + 'start=' + m.resume;
     }
   }
   const url = m.url || '/view' + q(m.path);
@@ -345,9 +365,16 @@ async function showCurrent(forceKind){
     : m.kind === 'pdf'
     ? '<iframe class="pdfview" src="' + url + '"></iframe>'
     : '<img src="' + url + '" alt="">';
+  if (m.kind === 'image' || m.kind === 'pdf') watchSet(m.path, 'done');
   if (m.kind === 'video' || m.kind === 'audio') {
     const el = stage.querySelector('video, audio');
-    if (m.kind === 'video' && m.mode === 'stream') { m.base = url; m.offset = 0; attachStreamControls(el, m); }
+    if (m.kind === 'video' && m.mode === 'stream') { m.base = url; m.offset = m.resume || 0; attachStreamControls(el, m); }
+    if (m.resume && m.kind === 'video' && m.mode !== 'stream')
+      el.addEventListener('loadedmetadata', () => {
+        try { el.currentTime = Math.min(m.resume, (el.duration || m.resume + 1) - 5); }
+        catch (e) {}
+      }, { once: true });
+    attachProgress(m, el);
     if (isBuild) {
       // Detached build: poll /remux?status=1 (first poll also spawns it),
       // mount the source only when the file is ready. No browser ever waits
@@ -543,6 +570,64 @@ function vts(s){
   return isFinite(t) ? t : null;
 }
 
+// ---- watch list (localStorage only; server stays stateless) ----------
+// Video: ring pip = partially watched (position kept for resume), solid
+// green pip = finished. Audio/images/PDF/archive-members: solid pip once
+// viewed (audio at >=90%, images/PDF on open, video near the end or on
+// 'ended'). Keys are virtual paths, so files INSIDE .zip/.cbz/.rar get
+// their own pips. Everything is per-browser by design: no server state.
+const WATCH_CAP = 400;
+function watchStore(){
+  try { return JSON.parse(localStorage.getItem('mbWatch')) || {}; }
+  catch (e) { return {}; }
+}
+function watchSet(path, state, t, dur){
+  if (!watchOn()) return;
+  const w = watchStore();
+  w[path] = state === 'done' ? { s: 'd', ts: Date.now() }
+    : { s: 'p', t: Math.round(t), d: Math.round(dur || 0), ts: Date.now() };
+  const ks = Object.keys(w);
+  if (ks.length > WATCH_CAP)
+    ks.sort((a, b) => w[a].ts - w[b].ts).slice(0, ks.length - WATCH_CAP)
+      .forEach(k => delete w[k]);
+  localStorage.setItem('mbWatch', JSON.stringify(w));
+  updatePip(path);
+}
+function watchPip(path){
+  if (!watchOn()) return '';
+  const r = watchStore()[path];
+  if (!r) return '';
+  return '<span class="pip ' + r.s + '" title="'
+    + (r.s === 'd' ? 'viewed' : 'resume at ' + fmtT(r.t)) + '"></span>';
+}
+function updatePip(path){
+  document.querySelectorAll('[data-file]').forEach(c => {
+    if (c.dataset.file !== path) return;
+    const th = c.querySelector('.thumb'); if (!th) return;
+    th.querySelectorAll('.pip').forEach(p => p.remove());
+    th.insertAdjacentHTML('beforeend', watchPip(path));
+  });
+}
+let lastWatchSave = 0;
+function attachProgress(m, el){
+  if (!watchOn() || !['video','audio'].includes(m.kind)) return;
+  const save = force => {
+    const now = Date.now();
+    if (!force && now - lastWatchSave < 3000) return;
+    lastWatchSave = now;
+    const pos = (el.currentTime || 0) + (m.offset || 0);
+    const dur = m.dur || el.duration || 0;
+    if (m.kind === 'video') {
+      const tail = Math.min(15, dur * 0.05);   // don't over-match short clips
+      if (dur && pos > dur - tail) watchSet(m.path, 'done');
+      else if (pos > Math.min(30, dur * 0.1)) watchSet(m.path, 'partial', pos, dur);
+    } else if (dur && pos > dur * 0.9) watchSet(m.path, 'done');
+  };
+  el.addEventListener('timeupdate', () => save(false));
+  el.addEventListener('pause', () => save(true));
+  el.addEventListener('ended', () => watchSet(m.path, 'done'));
+}
+
 // ---- fullscreen + settings popover ------------------------------------
 function fsEl(){ return document.fullscreenElement || document.webkitFullscreenElement; }
 function toggleFS(){
@@ -559,6 +644,9 @@ const pbSel = document.getElementById('pbSel');
 const autoplayChk = document.getElementById('autoplayChk');
 const sizeChk = document.getElementById('sizeChk');
 const subsChk = document.getElementById('subsChk');
+const watchChk = document.getElementById('watchChk');
+const resumeChk = document.getElementById('resumeChk');
+const dirChk = document.getElementById('dirChk');
 document.getElementById('cogBtn').addEventListener('click', e => {
   e.stopPropagation(); settings.hidden = !settings.hidden;
 });
@@ -576,6 +664,9 @@ autoplayChk.checked = autoplayOn();
 sizeChk.checked = localStorage.getItem('mbShowSize') !== '0';
 document.body.classList.toggle('no-size', !sizeChk.checked);
 subsChk.checked = subsOn();
+watchChk.checked = watchOn();
+resumeChk.checked = resumeOn();
+dirChk.checked = rememberOn();
 themeSel.addEventListener('change', () => {
   localStorage.setItem('mbTheme', themeSel.value); applyTheme(themeSel.value);
 });
@@ -599,6 +690,14 @@ subsChk.addEventListener('change', () => {
     if (m && ['video','audio'].includes(m.kind)) { m.retry = undefined; showCurrent(false); }
   }
 });
+watchChk.addEventListener('change', () => {
+  localStorage.setItem('mbWatchOn', watchChk.checked ? '1' : '0');
+  render(current);        // repaint the grid with/without pips
+});
+resumeChk.addEventListener('change', () =>
+  localStorage.setItem('mbResume', resumeChk.checked ? '1' : '0'));
+dirChk.addEventListener('change', () =>
+  localStorage.setItem('mbLastDirOn', dirChk.checked ? '1' : '0'));
 
 // ---- routing ----
 function dirUrl(p){ return p ? '/browse/' + p.split('/').map(encodeURIComponent).join('/') : '/'; }
@@ -627,7 +726,13 @@ document.getElementById('homelink').addEventListener('click', e => { e.preventDe
 const startMedia = locPath(/^\/media\/(.*)$/);
 const startBrowse = locPath(/^\/browse\/(.*)$/);
 if (startMedia) openFromUrl(startMedia.replace(/\/+$/,''));
-else go(startBrowse === null ? '' : startBrowse.replace(/\/+$/,''), false);
+else {
+  let boot = startBrowse === null ? '' : startBrowse.replace(/\/+$/,'');
+  // "remember last folder": a bare root visit returns you where you left off
+  if (startBrowse === null && rememberOn())
+    boot = localStorage.getItem('mbLastFolder') || '';
+  go(boot, false);
+}
 </script>
 </body>
 </html>

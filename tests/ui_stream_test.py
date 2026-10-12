@@ -67,6 +67,7 @@ def main():
          "-shortest", "-y", str(clip)],
         check=True, timeout=120)
     (media / "broken.avi").write_bytes(os.urandom(4096))   # fails any build
+    (media / "Show S01").mkdir()                           # folder-memory target
 
     # second clip: same video + one embedded SRT track + one sidecar SRT
     srt = media / "sub_src.srt"
@@ -288,6 +289,51 @@ def run_ui(sync_playwright, slots_dir):
         st2 = js.load(urllib.request.urlopen(f"{BASE}/remux?path=broken.avi&status=1"))
         check("status poll observes (does not respawn) error",
               st2.get("state") == "error", str(st2))
+
+        # --- watch list / resume / remember-folder (all default ON) ---
+        page.goto(f"{BASE}/")
+        page.wait_for_selector("#cogBtn")
+        page.click("#cogBtn")
+        defaults = page.evaluate("""() => [watchChk.checked, resumeChk.checked,
+                                            dirChk.checked]""")
+        check("UI: watch/resume/remember default to on", defaults == [True, True, True])
+        page.keyboard.press("Escape")
+        page.evaluate("""() => localStorage.setItem('mbWatch', JSON.stringify({
+            'test_clip.mkv': { s: 'p', t: 12, d: 20, ts: Date.now() } }))""")
+        page.goto(f"{BASE}/")
+        page.wait_for_selector('[data-file="test_clip.mkv"] .pip.p')
+        check("UI: partial-watch ring pip rendered on card", True)
+        page.click('[data-file="test_clip.mkv"]')
+        page.wait_for_function(
+            "() => { const v = document.querySelector('video');"
+            " return v && v.currentTime > 10; }", timeout=60000)
+        check("UI: seekable video resumes at stored position", True)
+        page.evaluate("""() => { const v = document.querySelector('video');
+            v.currentTime = 19.5; v.pause();
+            v.dispatchEvent(new Event('pause')); }""")
+        pip = page.evaluate("""() => {
+            const c = document.querySelector('[data-file="test_clip.mkv"] .pip');
+            return c ? c.className : ''; }""")
+        check("UI: watched-to-end upgrades pip to solid (watched)", "d" in pip, pip)
+
+        # --- remember-last-folder ---
+        page.keyboard.press("Escape")
+        page.click('[data-dir="Show S01"]')
+        page.wait_for_timeout(1200)
+        page.goto(f"{BASE}/")                      # bare root visit…
+        page.wait_for_selector("nav a[data-path='Show S01']", timeout=8000)
+        check("UI: bare root returns to last folder", True)
+        page.click("#cogBtn")
+        page.uncheck("#dirChk")
+        page.keyboard.press("Escape")
+        page.goto(f"{BASE}/")
+        page.wait_for_selector(".card")
+        at_root = page.evaluate(
+            "() => location.pathname === '/' && "
+            "!document.querySelector(\"nav a[data-path='Show S01']\")")
+        check("UI: setting off disables folder memory", at_root)
+        page.click("#cogBtn")
+        check("UI: folder-memory toggle kept off", page.evaluate("() => dirChk.checked") is False)
         fcntl.flock(lk, fcntl.LOCK_EX)          # cache hit must not need the pool
         try:
             t0 = time.time()
