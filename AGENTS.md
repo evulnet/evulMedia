@@ -2,7 +2,7 @@
 
 ## Project mode: REAL
 
-Public GitHub repo: `nkavassalis/evulMedia` (https://github.com/nkavassalis/evulMedia).
+Public GitHub repo: `evulnet/evulMedia` (https://github.com/evulnet/evulMedia).
 See "Guardrails" at the bottom before pushing anything.
 
 ## Purpose
@@ -215,7 +215,7 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
 ## Do-not-touch list
 
 - `LICENSE` (MIT), repo visibility (public), and the repo's GitHub location
-  (`nkavassalis/evulMedia`).
+  (`evulnet/evulMedia`).
 - The auth-delegation model (app stays auth-free; Caddy owns auth/TLS).
 - The jail checks in `safe_resolve`/`split_archive` — loosening any of them
   (dotfiles, `..`, symlink resolution, zip caps) is a security regression.
@@ -227,8 +227,9 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
 
 ## Guardrails in effect
 
-- GitHub account: **nkavassalis**; verify with `gh auth status` before
-  pushing (token lives in `gh`, never in the repo).
+- GitHub org: **evulnet** (repo lives there; personal account
+  **nkavassalis** is an org admin and pushes through it); verify with
+  `gh auth status` before pushing (token lives in `gh`, never in the repo).
 - Work on feature branches; open PRs; PRs must have `selftest.py` green
   (35/35) and, for any player/UI change, `tests/ui_stream_test.py` green
   (or an explicit SKIP note plus manual verification described in the PR).
