@@ -11,6 +11,7 @@ MB_ROOT of a prod instance.
 Skips (exit 0 with a message) when ffmpeg or Chromium is unavailable.
 """
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -18,6 +19,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -83,16 +85,24 @@ def main():
            "MB_PORT": str(PORT), "MB_SECRET": "ui-test-secret",
            "MB_SUBS": "1", "MB_MAX_TRANSCODES": "1",
            "MB_REMUX_DIR": str(data / "remux"), "MB_SLOTS_DIR": str(data / "slots")}
+    errlog = open(data / "srv.log", "wb")
     srv = subprocess.Popen(
         [sys.executable, str(REPO / "app.py")], env=env, cwd=REPO,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=errlog)
     try:
         if not wait_port(PORT):
             print("FAIL: dev server did not start")
             sys.exit(1)
-        run_ui(sync_playwright, data / "slots")
+        run_ui(sync_playwright, data / "slots", data)
     finally:
         srv.terminate()
+        errlog.close()
+
+
+def stream_urls(data_dir):
+    """Query strings of every /stream request, in order, from server log."""
+    with open(data_dir / "srv.log", "rb") as f:
+        return re.findall(rb"GET /stream\?([^ ]+) HTTP", f.read())
         shutil.rmtree(tmp, ignore_errors=True)
 
     print(f"\n{len(FAILS)} failure(s)")
@@ -106,7 +116,7 @@ def _status(url):
         return e.code
 
 
-def run_ui(sync_playwright, slots_dir):
+def run_ui(sync_playwright, slots_dir, data_dir):
     import urllib.request, json as js
 
     # --- server-side: /stream pipes an fMP4, ?start= seeks ---
@@ -306,7 +316,7 @@ def run_ui(sync_playwright, slots_dir):
         page.click('[data-file="test_clip.mkv"]')
         page.wait_for_function(
             "() => { const v = document.querySelector('video');"
-            " return v && v.currentTime > 10; }", timeout=60000)
+            " return v && v.currentTime > 10; }", timeout=5000)
         check("UI: seekable video resumes at stored position", True)
         page.evaluate("""() => { const v = document.querySelector('video');
             v.currentTime = 19.5; v.pause();
@@ -316,6 +326,37 @@ def run_ui(sync_playwright, slots_dir):
             return c ? c.className : ''; }""")
         check("UI: watched-to-end upgrades pip to solid (watched)", "d" in pip, pip)
 
+        # --- resumed LIVE stream: start= param single-valued and correct ---
+        # (m.base must stay clean; a second start= in the URL would be the
+        #  second value of a duplicate param — Werkzeug takes the FIRST,
+        #  silently clamping every seek back to the resume point)
+        page.keyboard.press("Escape")
+        page.evaluate("() => localStorage.setItem('mbPbMode', 'auto')")
+        page.evaluate("""() => localStorage.setItem('mbWatch', JSON.stringify({
+            'test_clip.mkv': { s: 'p', t: 12, d: 20, ts: Date.now() } }))""")
+        page.goto(f"{BASE}/")
+        page.click('[data-file="test_clip.mkv"]')
+        page.wait_for_function(
+            "() => { const v = document.querySelector('video');"
+            " return v && v.readyState >= 2; }", timeout=30000)
+        page.wait_for_timeout(1200)
+        ups = stream_urls(data_dir)
+        last = urllib.parse.parse_qs(ups[-1].decode()) if ups else {}
+        ok = last.get("start") and len(ups[-1].split(b"start=")) == 2 \
+             and abs(float(last["start"][0]) - 12) <= 1.5
+        check("UI: resumed live stream sends single start=12", bool(ok),
+              ups[-1].decode() if ups else "no /stream request")
+        page.evaluate("""() => { const i = document.querySelector('.seekctl input');
+            i.value = 6; i.dispatchEvent(new Event('change', { bubbles: true })); }""")
+        page.wait_for_timeout(1800)
+        ups = stream_urls(data_dir)
+        last = urllib.parse.parse_qs(ups[-1].decode()) if ups else {}
+        ok = last.get("start") and len(ups[-1].split(b"start=")) == 2 \
+             and abs(float(last["start"][0]) - 6) <= 1.5
+        check("UI: scrub after resume lands on target (no stale start)", bool(ok),
+              ups[-1].decode() if ups else "no /stream request")
+        page.keyboard.press("Escape")
+
         # --- remember-last-folder ---
         page.keyboard.press("Escape")
         page.click('[data-dir="Show S01"]')
@@ -323,6 +364,13 @@ def run_ui(sync_playwright, slots_dir):
         page.goto(f"{BASE}/")                      # bare root visit…
         page.wait_for_selector("nav a[data-path='Show S01']", timeout=8000)
         check("UI: bare root returns to last folder", True)
+        page.evaluate("() => localStorage.setItem('mbLastFolder', 'gone/nope')")
+        page.goto(f"{BASE}/")                      # remembered dir no longer exists
+        page.wait_for_selector(".card", timeout=8000)
+        fell_back = page.evaluate(
+            "() => !document.querySelector(\"nav a[data-path='gone/nope']\")"
+            " && !content.textContent.includes('not found')")
+        check("UI: deleted remembered folder falls back to root", fell_back)
         page.click("#cogBtn")
         page.uncheck("#dirChk")
         page.keyboard.press("Escape")

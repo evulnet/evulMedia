@@ -53,7 +53,7 @@ venv/bin/python selftest.py                       # must exit 0; 38 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
-venv/bin/python tests/ui_stream_test.py           # 45 checks; prints SKIP (exit 0) without deps
+venv/bin/python tests/ui_stream_test.py           # 48 checks; prints SKIP (exit 0) without deps
 
 # 3) Lint: no configured linter; keep `python3 -m py_compile app.py selftest.py` clean
 ```
@@ -87,7 +87,11 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   fakes a seekable bar. Pause closes the pipe immediately (freeing a
   transcode slot) and shows a resume overlay — this is why pause no longer
   burns `MB_STALL_TIMEOUT`. Do not replace with `-copyts`/output seek
-  without browser-testing all fallback paths.
+  without browser-testing all fallback paths. `m.base` MUST stay free of
+  any `start=` param: the resume/seek URL is always composed fresh via
+  `streamUrl()` — a duplicate `start=` would make Werkzeug take the
+  FIRST value and silently clamp every seek back to the resume point
+  (regression-tested via server-log assertions in the UI suite).
 - **Subtitles are opt-in** (`MB_SUBS=1`, default off): `/api/subs` lists
   embedded text streams (ffprobe) + sidecar files; `/subs` serves one track
   as WebVTT (ffmpeg conversion for embedded/ASS, cached under
@@ -119,11 +123,15 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   the resume position) until within `min(15s, 5%)` of the end or `ended`,
   then solid; audio → solid at ≥90%; images/PDF → solid on open. Keys are
   virtual paths, so archive members (`book.cbz/page-001.jpg`) get their
-  own pips. Resume: seekable modes set `currentTime` on `loadedmetadata`;
-  the live pipe resumes by appending `?start=` to the sign URL (offset-
-  aware through `attachStreamControls`). Toggles `mbWatchOn`/`mbResume`/
+  own pips. Resume: seekable modes set `currentTime` on `loadedmetadata`
+  (guard is proportional: edge = `min(20s, 10% of dur)`, so short clips
+  resume too); the live pipe resumes by composing `?start=` onto the
+  CLEAN signed URL at attach (offset-
+  aware through `attachStreamControls`). `watchStore()` is memoized ~2 s
+  (cardHTML calls it per card). Toggles `mbWatchOn`/`mbResume`/
   `mbLastDirOn` are default-on (`!== '0'`). Root-URL folder recall only
-  fires on a bare `/` visit, never on `/browse/...` or `/media/...` links.
+  fires on a bare `/` visit, never on `/browse/...` or `/media/...` links,
+  and verify-exists first (deleted folder → plain root, never an error).
 - **Autoplay is best-effort, tap-to-play is the contract:** the
   sign→(poll)→src chain burns the user gesture, so every mount sets
   `playsinline`, and when `autoplayOn()` the player attempts `el.play()`
