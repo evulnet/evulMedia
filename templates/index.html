@@ -404,7 +404,8 @@ async function showCurrent(forceKind){
         }
         if (my !== uiGen) return;
         el.src = url;
-        el.play().then(() => {}, () => { pp.style.display = 'flex'; });
+        if (autoplayOn())
+          el.play().then(() => {}, () => { pp.style.display = 'flex'; });
         el.addEventListener('loadedmetadata', () => ov.remove(), {once:true});
         el.addEventListener('error', () => { ov.remove(); failover(); }, {once:true});
       })();
@@ -435,9 +436,16 @@ async function showCurrent(forceKind){
     pp.onclick = () => el.play().then(() => pp.remove(), () => {});
     stage.appendChild(pp);
     el.addEventListener('playing', () => pp.remove());
-    const tryPlay = () => { if (autoplayOn() && !el.src) return; el.play().then(() => {}, () => { pp.style.display = 'flex'; }); };
+    const tryPlay = () => {
+      if (!autoplayOn()) return;          // respect the user's autoplay-off setting
+      if (!el.src) return;                // async build: its own poller plays
+      el.play().then(() => {}, () => { pp.style.display = 'flex'; });
+    };
     if (!isBuild && (m.kind === 'video' || m.kind === 'audio')) tryPlay();
-    el.addEventListener('loadedmetadata', () => { if (el.paused && (m.kind === 'video' || m.kind === 'audio')) pp.style.display = 'flex'; }, { once: true });
+    el.addEventListener('loadedmetadata', () => {
+      if (el.paused && (m.kind === 'video' || m.kind === 'audio'))
+        pp.style.display = 'flex';
+    }, { once: true });
   }
   modal.querySelector('.links').innerHTML =
     '<a href="' + url + '" download="' + esc(m.name) + '">download</a>';

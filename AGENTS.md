@@ -53,7 +53,7 @@ venv/bin/python selftest.py                       # must exit 0; 38 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
-venv/bin/python tests/ui_stream_test.py           # 42 checks; prints SKIP (exit 0) without deps
+venv/bin/python tests/ui_stream_test.py           # 45 checks; prints SKIP (exit 0) without deps
 
 # 3) Lint: no configured linter; keep `python3 -m py_compile app.py selftest.py` clean
 ```
