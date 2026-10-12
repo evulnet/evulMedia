@@ -40,6 +40,11 @@ def main():
         check(f"traversal blocked: {evil}", c.get(f"/api/ls?path={evil}").status_code in (403, 404))
     check("dotfile blocked", c.get("/api/ls?path=.ssh").status_code in (403, 404))
 
+    # --- branding assets served ---
+    check("favicon svg served", c.get("/static/favicon.svg").status_code == 200)
+    check("favicon png fallback served", c.get("/static/favicon.png").status_code == 200)
+    check("apple-touch-icon served", c.get("/static/apple-touch-icon.png").status_code == 200)
+
     # --- sign / tokens ---
     secret = os.environ.get("MB_SECRET", "")
     r = c.get("/api/ls")

@@ -15,10 +15,11 @@ RUNUSER="${RUNUSER:-www-data}"
 
 [ "$(id -u)" -eq 0 ] || { echo "run as root (or: sudo $0)"; exit 1; }
 
-install -d -m 755 "$PREFIX" "$PREFIX/env" "$PREFIX/templates"
+install -d -m 755 "$PREFIX" "$PREFIX/env" "$PREFIX/templates" "$PREFIX/static"
 install -m 644 "$SRC/app.py" "$SRC/wsgi.py" "$SRC/requirements.txt" \
                  "$SRC/selftest.py" "$PREFIX/"
 install -m 644 "$SRC/templates/index.html" "$PREFIX/templates/"
+install -m 644 "$SRC"/static/* "$PREFIX/static/"
 
 # env files: copy only *.env (not the *.example seeds); never clobber edits
 shopt -s nullglob
