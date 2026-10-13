@@ -87,7 +87,7 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   fakes a seekable bar. Pause closes the pipe immediately (freeing a
   transcode slot) and shows a resume overlay — this is why pause no longer
   burns `MB_STALL_TIMEOUT`. Do not replace with `-copyts`/output seek
-  without browser-testing all fallback paths. `m.base` MUST stay free of
+  without browser-testing all fallback paths. Live pipes hide native video controls (no honest duration exists for a pipe; Firefox fabricates one from the buffer) — click toggles play/pause and the .bar strip is the single source of truth for position. `m.base` MUST stay free of
   any `start=` param: the resume/seek URL is always composed fresh via
   `streamUrl()` — a duplicate `start=` would make Werkzeug take the
   FIRST value and silently clamp every seek back to the resume point

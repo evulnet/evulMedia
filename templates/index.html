@@ -472,6 +472,16 @@ function step(d){
 function attachStreamControls(el, m){
   const bar = modal.querySelector('.bar');
   let tearing = false, ended = false, userScrub = false;
+  // A live fMP4 pipe has no intrinsic duration — the native control bar
+  // would advertise one straight from the buffer estimate (a lie that
+  // looks horribly plausible on chaptered files). Hide it; the .bar
+  // beneath carries the TRUE probed duration, and click toggles play.
+  el.controls = false;
+  el.title = 'click: play/pause \u00b7 F: fullscreen';
+  el.style.cursor = 'pointer';
+  el.addEventListener('click', () => {
+    if (el.paused) el.play().catch(() => {}); else el.pause();
+  });
   const pos = () => (el.currentTime || 0) + (m.offset || 0);
   const streamUrl = t => m.base + (m.base.indexOf('?') >= 0 ? '&' : '?')
                           + 'start=' + Math.max(0, t).toFixed(1);
