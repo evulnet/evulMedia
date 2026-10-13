@@ -73,7 +73,7 @@ Every box above is browsable, streamable and shareable via URL.
 - **Self-expiring caches**: remux and thumbnail caches are LRU + age GC'd
   on service start and every 6 h.
 - **Self-test suite** (`selftest.py`) that deploys can run as a smoke test
-  (38 checks), and a Playwright browser test for the player UI
+  (41 checks), and a Playwright browser test for the player UI
   (`tests/ui_stream_test.py`, dev-only — needs Chromium).
 
 ## Requirements
@@ -212,7 +212,7 @@ Endpoints worth knowing: `/api/ls?path=`, `/api/sign?path=[&mode=stream|mp4]`,
 ```
 app.py                  the whole server
 wsgi.py                 gunicorn entrypoint
-selftest.py             38-check smoke suite (read-only, safe on prod)
+selftest.py             41-check smoke suite (read-only, safe on prod)
 static/                 favicon.svg + favicon.png + apple-touch-icon.png
                         (regenerate PNGs with scripts/make_icons.py)
 templates/index.html    single-page frontend (no build step, no CDN)

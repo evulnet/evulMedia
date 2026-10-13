@@ -355,6 +355,17 @@ def run_ui(sync_playwright, slots_dir, data_dir):
              and abs(float(last["start"][0]) - 6) <= 1.5
         check("UI: scrub after resume lands on target (no stale start)", bool(ok),
               ups[-1].decode() if ups else "no /stream request")
+
+        # --- live pipe: native bar hidden, click pauses -> resume overlay ---
+        has_ctrl = page.evaluate("() => document.querySelector('video').controls")
+        check("UI: live pipe hides native controls", has_ctrl is False)
+        page.click("video")
+        page.wait_for_selector(".resumeov", timeout=5000)
+        check("UI: click-to-pause tears pipe down, resume overlay appears", True)
+        page.click(".resumeov")
+        page.wait_for_function(
+            "() => document.querySelector('video').currentTime > 1", timeout=15000)
+        check("UI: resume overlay restarts the pipe", True)
         page.keyboard.press("Escape")
 
         # --- remember-last-folder ---
