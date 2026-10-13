@@ -18,7 +18,7 @@ Emby/Jellyfin. Keep that spirit in every change: fewer moving parts, not more.
 ```
 app.py                  the entire server (single file, ~1050 lines; see section below)
 wsgi.py                 gunicorn entrypoint (calls create_app())
-selftest.py             38-check smoke suite; read-only, safe to run on prod
+selftest.py             41-check smoke suite; read-only, safe to run on prod
 templates/index.html    whole frontend: one HTML file, inline CSS/JS, no build step,
                         no frameworks, no CDN
 static/                 favicon set (favicon.svg for modern browsers, favicon.png
@@ -53,7 +53,7 @@ venv/bin/python selftest.py                       # must exit 0; 41 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
-venv/bin/python tests/ui_stream_test.py           # 48 checks; prints SKIP (exit 0) without deps
+venv/bin/python tests/ui_stream_test.py           # 51 checks; prints SKIP (exit 0) without deps
 
 # 3) Lint: no configured linter; keep `python3 -m py_compile app.py selftest.py` clean
 ```
@@ -80,7 +80,11 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   detected client-side via `IS_SAFARI`) because Safari rejects the chunked
   live pipe entirely; other browsers use the live pipe (`/stream?transcode=1`).
   Frontend falls back `/stream → /remux → forced transcode` automatically
-  on media errors.
+  on media errors. "Browser-safe" means codec allowlist AND 8/10-bit
+  4:2:0 `pix_fmt` (`BROWSER_PIX_FMT`): RGB/4:2:2/4:4:4 HEVC or h264 decodes
+  to green mush in browsers, so `/api/sign` probes pixel format and sends
+  such files to the transcode pipe even inside friendly `.mp4`/`.webm`
+  containers — do not widen that set.
 - **Live-stream pseudo-seek:** `/stream?...&start=SECONDS` input-seeks
   (`-ss` *before* `-i`) so the output timeline restarts at 0; the frontend
   (`attachStreamControls` in index.html) tracks the content offset and
@@ -274,7 +278,7 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   **nkavassalis** is an org admin and pushes through it); verify with
   `gh auth status` before pushing (token lives in `gh`, never in the repo).
 - Work on feature branches; open PRs; PRs must have `selftest.py` green
-  (38/38) and, for any player/UI change, `tests/ui_stream_test.py` green
+  (41/41) and, for any player/UI change, `tests/ui_stream_test.py` green
   (or an explicit SKIP note plus manual verification described in the PR).
 - Never push with failing checks; never force-push master; never commit
   anything resembling a secret, hostname, private IP, path under a real

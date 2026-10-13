@@ -212,9 +212,9 @@ def read_member(apath, member, max_size=512 * 1024 * 1024):
 
 TOKEN_TTL = 3600
 NATIVE_VIDEO_EXTS = {".mp4", ".m4v", ".webm"}          # browsers can play these directly
-COPY_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9", "av1"}
+COPY_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9", "av1"}   # HEVC copies too; players that can't HW-decode fall back client-side
 
-BROWSER_PIX_FMT = {"yuv420p", "yuv420p10le"}   # the universal-decoder subset   # HEVC copies too; players that can't HW-decode fall back client-side
+BROWSER_PIX_FMT = {"yuv420p", "yuv420p10le"}   # the universal-decoder subset
 COPY_AUDIO_CODECS = {"aac", "mp3", "opus"}   # ac3/eac3 stay in → audio-only transcode (video still copies)
 
 
@@ -1016,9 +1016,10 @@ def create_app():
             kind == "audio" and target.suffix.lower() not in NATIVE_AUDIO_EXTS
         )
         vplan = None
-        if kind == "video" and not want_stream:
-            # Native container, exotic guts (RGB/4:2:2/4:4:4): direct play
-            # would render green; send through the transcode pipe instead.
+        if kind == "video":
+            # ONE probe per video sign: pixel-format policy applies to
+            # native containers too (RGB/4:2:2/4:4:4 HEVC renders green
+            # → must not go /files) and sets the pipe's transcode flag.
             vplan = plan_from_probe(probe(["ffprobe", "-v", "error"], target))
             if vplan == "transcode":
                 want_stream = True
@@ -1027,10 +1028,7 @@ def create_app():
             # dur lets the frontend render a pseudo-seek bar for the live pipe.
             return jsonify({"url": f"/stream?path={urllib.parse.quote(rel)}",
                             "mode": "stream", "name": target.name,
-                            "transcode": force or vplan == "transcode" or (
-                                vplan is None and plan_from_probe(
-                                    probe(["ffprobe", "-v", "error"],
-                                          target)) == "transcode"),
+                            "transcode": force or vplan == "transcode",
                             "dur": probe_duration(target)})
         if signer is None:
             # No Caddy in front (local dev): fall back to app streaming.
