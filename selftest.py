@@ -123,6 +123,10 @@ def main():
     check("plan forced transcode", plan_from_probe([V("h264"), A("aac")], True) == "transcode")
     check("plan audio-only flac tc", plan_from_probe([A("flac")]) == "transcode-audio")
     check("plan audio-only opus copy", plan_from_probe([A("opus")]) == "copy")
+    VP = lambda n, p: {"codec_type": "video", "codec_name": n, "pix_fmt": p}
+    check("plan hevc gbrp transcode", plan_from_probe([VP("hevc", "gbrp")]) == "transcode")
+    check("plan hevc yuv444p transcode", plan_from_probe([VP("hevc", "yuv444p")]) == "transcode")
+    check("plan hevc 10-bit yuv copy", plan_from_probe([VP("hevc", "yuv420p10le")]) == "copy")
 
     # --- stream command construction (no ffmpeg needed) ---
     cmd0 = build_stream_cmd("copy", "in.mkv", True, True)

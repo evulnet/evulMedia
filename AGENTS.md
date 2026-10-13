@@ -49,7 +49,7 @@ empty in dev; production requires it.
 
 ```bash
 # 1) Smoke/logic suite — run against real env on deploys:
-venv/bin/python selftest.py                       # must exit 0; 38 checks
+venv/bin/python selftest.py                       # must exit 0; 41 checks
 
 # 2) Browser UI suite (dev only) — needs ffmpeg + `playwright install chromium`:
 venv/bin/pip install playwright && venv/bin/playwright install chromium
@@ -92,6 +92,11 @@ tree in `tempfile` — never point dev servers or tests at someone's real librar
   `streamUrl()` — a duplicate `start=` would make Werkzeug take the
   FIRST value and silently clamp every seek back to the resume point
   (regression-tested via server-log assertions in the UI suite).
+- **Browser-safe video is codec AND pixel-format:** plan_from_probe re-encodes
+  anything outside COPY_VIDEO_CODECS or outside `BROWSER_PIX_FMT`
+  (yuv420p / yuv420p10le). RGB or 4:2:2/4:4:4 HEVC/h264 decode to green mush
+  in every engine — a codec-name allowlist is not enough. `/api/sign` applies
+  the same rule to native-container files (green-file downgrade to /stream).
 - **Subtitles are opt-in** (`MB_SUBS=1`, default off): `/api/subs` lists
   embedded text streams (ffprobe) + sidecar files; `/subs` serves one track
   as WebVTT (ffmpeg conversion for embedded/ASS, cached under

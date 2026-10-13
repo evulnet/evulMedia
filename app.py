@@ -212,7 +212,9 @@ def read_member(apath, member, max_size=512 * 1024 * 1024):
 
 TOKEN_TTL = 3600
 NATIVE_VIDEO_EXTS = {".mp4", ".m4v", ".webm"}          # browsers can play these directly
-COPY_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9", "av1"}   # HEVC copies too; players that can't HW-decode fall back client-side
+COPY_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9", "av1"}
+
+BROWSER_PIX_FMT = {"yuv420p", "yuv420p10le"}   # the universal-decoder subset   # HEVC copies too; players that can't HW-decode fall back client-side
 COPY_AUDIO_CODECS = {"aac", "mp3", "opus"}   # ac3/eac3 stay in → audio-only transcode (video still copies)
 
 
@@ -282,7 +284,7 @@ def probe(streams, source):
     """Run ffprobe and return the list of stream dicts."""
     try:
         result = subprocess.run(
-            streams + ["-show_entries", "stream=codec_type,codec_name",
+            streams + ["-show_entries", "stream=codec_type,codec_name,pix_fmt",
                        "-of", "json", str(source)],
             capture_output=True, text=True, timeout=30,
         )
@@ -319,6 +321,13 @@ def plan_from_probe(probed, force_transcode=False):
         return "copy" if acodec in COPY_AUDIO_CODECS else "transcode-audio"
     if vcodec not in COPY_VIDEO_CODECS:
         return "transcode"          # mpeg4/etc — browser can't decode
+    # Browser video decoders are 8/10-bit YUV 4:2:0 devices. RGB/4:2:2/4:4:4
+    # HEVC (Rext) or 4:4:4 h264 decode to green/magenta mush (or refuse), so
+    # such streams must be re-encoded even when the codec name looks safe.
+    pix_fmt = next((s.get("pix_fmt") for s in probed
+                    if s["codec_type"] == "video"), None)
+    if pix_fmt is not None and pix_fmt not in BROWSER_PIX_FMT:
+        return "transcode"
     if acodec is None:
         return "copy"
     if acodec in COPY_AUDIO_CODECS:
@@ -1006,11 +1015,22 @@ def create_app():
         ) or (
             kind == "audio" and target.suffix.lower() not in NATIVE_AUDIO_EXTS
         )
+        vplan = None
+        if kind == "video" and not want_stream:
+            # Native container, exotic guts (RGB/4:2:2/4:4:4): direct play
+            # would render green; send through the transcode pipe instead.
+            vplan = plan_from_probe(probe(["ffprobe", "-v", "error"], target))
+            if vplan == "transcode":
+                want_stream = True
         if want_stream and kind == "video":
             # App-streamed remux; no token needed (app route is already protected).
             # dur lets the frontend render a pseudo-seek bar for the live pipe.
             return jsonify({"url": f"/stream?path={urllib.parse.quote(rel)}",
                             "mode": "stream", "name": target.name,
+                            "transcode": force or vplan == "transcode" or (
+                                vplan is None and plan_from_probe(
+                                    probe(["ffprobe", "-v", "error"],
+                                          target)) == "transcode"),
                             "dur": probe_duration(target)})
         if signer is None:
             # No Caddy in front (local dev): fall back to app streaming.
